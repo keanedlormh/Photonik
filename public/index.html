@@ -3,37 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-    <title>Ultimate Racing Online v21</title>
+    <title>Ultimate Racing Online v22</title>
     <link rel="stylesheet" href="style.css">
-    <!-- Socket.IO Client -->
     <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 
-<!-- CONSOLA DE DEPURACIÓN -->
-<div id="debug-console">
-    <div style="color:#aaa;">> Initializing System...</div>
+<!-- CONSOLA DE DEPURACIÓN (Minimizable) -->
+<div id="debug-console-container">
+    <div id="console-header" onclick="window.toggleConsole()">
+        <span>SERVER LOG</span>
+        <span id="console-toggle-btn">_</span>
+    </div>
+    <div id="console-body">
+        <div style="color:#aaa;">> Initializing System...</div>
+    </div>
 </div>
 
 <!-- PANTALLA DE INICIO / LOBBY -->
 <div id="start-screen">
     <div id="intro-panel">
         <h1>ULTIMATE ONLINE</h1>
-        <p>Servidor Autoritativo v2.1</p>
+        <p>Servidor Autoritativo v2.2</p>
         <button id="btn-start" onclick="enterLobby()">CONECTAR AL SERVIDOR</button>
     </div>
 
-    <!-- Panel de Lobby (Oculto al inicio) -->
-    <div id="lobby-ui">
-        <h2>SALA DE ESPERA</h2>
+    <!-- Panel de Lobby -->
+    <div id="lobby-ui" style="display:none; flex-direction:column; align-items:center; gap:15px; width:100%;">
+        <h2>LOBBY MULTIJUGADOR</h2>
+        
         <div style="display:flex; gap:10px;">
-            <button class="menu-item" style="background:#444; border:none; padding:10px 20px; border-radius:20px; cursor:pointer; color:white; font-weight:bold;" onclick="createGameRoom()">CREAR SALA</button>
+            <button class="menu-item" style="background:#ff3333; border:none; padding:10px 20px; border-radius:20px; cursor:pointer; color:white; font-weight:bold;" onclick="createGameRoom()">CREAR SALA NUEVA</button>
         </div>
+
+        <div style="width:80%; max-width:400px; border-top:1px solid #444; margin:10px 0;"></div>
+
+        <h3>BUSCAR SALAS</h3>
         <div style="display:flex; gap:10px; align-items:center;">
-            <input type="text" id="room-code-input" class="lobby-input" placeholder="CÓDIGO DE SALA">
-            <button class="menu-item" style="background:#3388ff; border:none; padding:10px 20px; border-radius:20px; cursor:pointer; color:white; font-weight:bold;" onclick="joinGameRoom()">UNIRSE</button>
+            <input type="text" id="room-code-input" class="lobby-input" placeholder="Código (Opcional)">
+            <button class="menu-item" style="background:#444; border:none; padding:10px 20px; border-radius:20px; cursor:pointer; color:white; font-weight:bold;" onclick="refreshRoomList()">BUSCAR ↻</button>
         </div>
-        <p id="server-status" style="font-size:0.8rem; color:#666;">Esperando conexión...</p>
+
+        <!-- Lista de Salas Dinámica -->
+        <div id="room-list-container">
+            <div style="padding:10px; color:#aaa; text-align:center;">Pulsa Buscar para ver salas...</div>
+        </div>
+
+        <p id="server-status" style="font-size:0.8rem; color:#666;">Offline</p>
     </div>
 </div>
 
@@ -65,18 +81,14 @@
             </label>
         </div>
         
-        <div class="menu-group-title">CONFIG SALA (ADMIN)</div>
-        <!-- Solo visual por ahora en cliente, la lógica real está en el servidor -->
+        <div class="menu-group-title">CONFIG (INFO)</div>
         <div class="menu-item">
-            <span>Vel. Máx (km/h)</span>
-            <input type="range" id="manual-max-speed" class="menu-range" min="120" max="999" value="500">
-            <span id="disp-max-speed" class="val-display">500</span>
+            <span>Vel. Máx</span>
+            <span id="disp-max-speed" class="val-display">---</span>
         </div>
-        
         <div class="menu-item">
-            <span>Acel. (km/h/s)</span>
-            <input type="range" id="manual-accel" class="menu-range" min="15" max="99" value="40">
-            <span id="disp-accel" class="val-display">+40</span>
+            <span>Aceleración</span>
+            <span id="disp-accel" class="val-display">---</span>
         </div>
 
         <div class="menu-group-title">CONTROLES</div>
@@ -109,7 +121,6 @@
         <div class="menu-item">
             <span id="mode-label" style="font-weight:bold; color:#ffaa00;">MANUAL (ONLINE)</span>
             <label class="switch">
-                <!-- Forzamos manual en online por defecto -->
                 <input type="checkbox" id="chk-mode" checked disabled>
                 <span class="slider-switch" style="opacity:0.5;"></span>
             </label>
@@ -121,7 +132,7 @@
         <input type="range" id="speedSlider" class="main-slider" min="0" max="1000" value="100">
     </div>
 
-    <div id="manual-controls" style="display:block;"> <!-- Por defecto visible en online -->
+    <div id="manual-controls" style="display:block;">
         <div id="hud-speed">
             <span id="speed-display">0</span><small> KM/H</small>
         </div>
@@ -135,14 +146,6 @@
     </div>
 </div>
 
-<script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-        }
-    }
-</script>
 <script type="module" src="main.js"></script>
 </body>
 </html>
