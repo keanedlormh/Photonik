@@ -8,9 +8,9 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 // CONFIGURACIÓN VISUAL
 // ==========================================
 const CONFIG = {
-    ROAD_WIDTH_HALF: 8.0,   // Ancho desde el centro al borde
-    WALL_WIDTH: 1.0,        // Grosor del muro
-    WALL_HEIGHT: 1.4,       // Altura del muro
+    ROAD_WIDTH_HALF: 8.0,
+    WALL_WIDTH: 1.0,
+    WALL_HEIGHT: 1.4,
     CHUNK_LENGTH: 100,
     VISIBLE_CHUNKS: 16
 };
@@ -124,20 +124,19 @@ let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = []; const smokeGroup = new THREE.Group();
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
-// MATERIALES REVISADOS
+// MATERIALES
 const matRoad = new THREE.MeshStandardMaterial({ 
-    color: 0x111111, // Gris Muy Oscuro (Asfalto Nuevo)
-    roughness: 0.8, 
-    metalness: 0.1,
-    flatShading: false
+    color: 0x111111, roughness: 0.8, metalness: 0.1, flatShading: false
 }); 
-const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1 }); // Hormigón claro
+const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1 });
 const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffcc00 }); 
 const matLineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
 const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.2, metalness: 0.5, flatShading: true });
 const matPillar = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
 const matLeaves = new THREE.MeshStandardMaterial({color: 0x2e7d32});
 const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
+const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdddddd, emissiveIntensity: 0.2, flatShading: true });
+const matAtmosphere = new THREE.PointsMaterial({ size: 0.5, color: 0xffffff, transparent: true, opacity: 0.4 });
 
 function initThreeJS() {
     scene = new THREE.Scene();
@@ -195,7 +194,7 @@ function setupEnvironment() {
 }
 
 // ==========================================
-// GENERACIÓN PROCEDURAL (Terreno y Carretera)
+// GENERACIÓN PROCEDURAL
 // ==========================================
 const noisePerm = new Uint8Array(512); const p = new Uint8Array(256);
 for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
@@ -220,7 +219,7 @@ class Chunk {
         const endZ = Math.sin(endAngle) * CONFIG.CHUNK_LENGTH + p0.z;
         
         let tH = getTerrainHeight(endX, endZ);
-        let targetY = (tH < 1) ? Math.max(p0.y, 5) : tH + 3.0; // Mínimo 3 metros sobre suelo
+        let targetY = (tH < 1) ? Math.max(p0.y, 5) : tH + 3.0;
         targetY = THREE.MathUtils.clamp(targetY, p0.y - 6.0, p0.y + 6.0);
 
         const p3 = new THREE.Vector3(endX, targetY, endZ);
@@ -235,6 +234,8 @@ class Chunk {
         this.buildStructure();
         this.buildTerrain();
         this.buildProps();
+        this.buildClouds();
+        this.buildAtmosphere();
     }
 
     buildStructure() {
@@ -243,153 +244,64 @@ class Chunk {
         const frames = this.curve.computeFrenetFrames(div, false);
         
         const roadV = [], roadN = [];
-
-        // 1. CARRETERA (ASFALTO)
         for(let i=0; i<=div; i++) {
-            const p = pts[i]; 
-            const n = frames.binormals[i]; 
-            const up = frames.normals[i];
-
+            const p = pts[i]; const n = frames.binormals[i]; const up = frames.normals[i];
             const l = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
             const r = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
-            
             roadV.push(l.x, l.y, l.z, r.x, r.y, r.z);
             roadN.push(up.x, up.y, up.z, up.x, up.y, up.z);
         }
-        
         const roadMesh = new THREE.Mesh(createStripGeometry(roadV, roadN), matRoad);
         roadMesh.receiveShadow = true; 
         this.group.add(roadMesh);
-
-        // 2. MUROS SÓLIDOS (Extrusión 3D)
-        this.createWallExtrusion(pts, frames, 1);  // Muro Izq
-        this.createWallExtrusion(pts, frames, -1); // Muro Der
-
-        // 3. LÍNEAS DE CARRIL (Pintura sobre asfalto)
+        this.createWallExtrusion(pts, frames, 1);
+        this.createWallExtrusion(pts, frames, -1);
         this.createRoadLines(pts, frames);
     }
 
     createWallExtrusion(pts, frames, side) {
-        // side: 1 = Izquierda, -1 = Derecha
-        const verts = [];
-        const norms = [];
+        const verts = [], norms = [];
         const offsetInner = CONFIG.ROAD_WIDTH_HALF;
         const offsetOuter = CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH;
         const h = CONFIG.WALL_HEIGHT;
-        const thickness = 0.8; // Profundidad hacia abajo para cubrir el borde de la carretera
+        const thickness = 0.8;
 
         for(let i=0; i<pts.length-1; i++) {
             const p1 = pts[i]; const n1 = frames.binormals[i].clone().multiplyScalar(side);
             const p2 = pts[i+1]; const n2 = frames.binormals[i+1].clone().multiplyScalar(side);
-
-            // Coordenadas Base (Nivel de carretera)
             const p1In = p1.clone().add(n1.clone().multiplyScalar(offsetInner));
             const p1Out = p1.clone().add(n1.clone().multiplyScalar(offsetOuter));
             const p2In = p2.clone().add(n2.clone().multiplyScalar(offsetInner));
             const p2Out = p2.clone().add(n2.clone().multiplyScalar(offsetOuter));
 
-            // -- TOP FACE (Tapa Superior) --
-            // Desde Y+h a Y+h
-            pushQuad(verts, norms,
-                new THREE.Vector3(p1Out.x, p1Out.y+h, p1Out.z), // Top Outer 1
-                new THREE.Vector3(p1In.x, p1In.y+h, p1In.z),    // Top Inner 1
-                new THREE.Vector3(p2Out.x, p2Out.y+h, p2Out.z), // Top Outer 2
-                new THREE.Vector3(p2In.x, p2In.y+h, p2In.z),    // Top Inner 2
-                new THREE.Vector3(0, 1, 0)
-            );
-
-            // -- INNER FACE (Cara Interna visible desde pista) --
-            // Desde Y+h hasta Y-thickness
-            const normIn = n1.clone().negate(); // Normal apunta al centro
-            pushQuad(verts, norms,
-                new THREE.Vector3(p1In.x, p1In.y+h, p1In.z),    // Top 1
-                new THREE.Vector3(p1In.x, p1In.y-thickness, p1In.z), // Bottom 1
-                new THREE.Vector3(p2In.x, p2In.y+h, p2In.z),    // Top 2
-                new THREE.Vector3(p2In.x, p2In.y-thickness, p2In.z), // Bottom 2
-                normIn
-            );
-
-            // -- OUTER FACE (Cara Externa) --
-            pushQuad(verts, norms,
-                new THREE.Vector3(p1Out.x, p1Out.y-thickness, p1Out.z),
-                new THREE.Vector3(p1Out.x, p1Out.y+h, p1Out.z),
-                new THREE.Vector3(p2Out.x, p2Out.y-thickness, p2Out.z),
-                new THREE.Vector3(p2Out.x, p2Out.y+h, p2Out.z),
-                n1
-            );
+            pushQuad(verts, norms, new THREE.Vector3(p1Out.x, p1Out.y+h, p1Out.z), new THREE.Vector3(p1In.x, p1In.y+h, p1In.z), new THREE.Vector3(p2Out.x, p2Out.y+h, p2Out.z), new THREE.Vector3(p2In.x, p2In.y+h, p2In.z), new THREE.Vector3(0, 1, 0));
+            pushQuad(verts, norms, new THREE.Vector3(p1In.x, p1In.y+h, p1In.z), new THREE.Vector3(p1In.x, p1In.y-thickness, p1In.z), new THREE.Vector3(p2In.x, p2In.y+h, p2In.z), new THREE.Vector3(p2In.x, p2In.y-thickness, p2In.z), n1.clone().negate());
+            pushQuad(verts, norms, new THREE.Vector3(p1Out.x, p1Out.y-thickness, p1Out.z), new THREE.Vector3(p1Out.x, p1Out.y+h, p1Out.z), new THREE.Vector3(p2Out.x, p2Out.y-thickness, p2Out.z), new THREE.Vector3(p2Out.x, p2Out.y+h, p2Out.z), n1);
         }
-
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-        geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
-        const mesh = new THREE.Mesh(geo, matWall);
+        const mesh = new THREE.Mesh(createStripGeometry(verts, norms), matWall);
         mesh.castShadow = true; mesh.receiveShadow = true;
         this.group.add(mesh);
     }
 
     createRoadLines(pts, frames) {
-        // Línea Central (Amarilla Discontinua)
-        const cV = [];
-        const lw = 0.2; // Ancho línea central
-        const yOff = 0.05; // Altura sobre asfalto
-        
-        // Líneas Laterales (Blancas Continuas)
-        const sV = [];
-        const sw = 0.3; // Ancho línea lateral
-        const dist = CONFIG.ROAD_WIDTH_HALF - 0.8; // Distancia del centro
-
+        const cV = [], sV = [];
+        const lw = 0.2, sw = 0.3, yOff = 0.05, dist = CONFIG.ROAD_WIDTH_HALF - 0.8;
         for(let i=0; i<pts.length-1; i++) {
-            const p1 = pts[i]; const n1 = frames.binormals[i];
-            const p2 = pts[i+1]; const n2 = frames.binormals[i+1];
-
-            // Central: Solo dibujar si es par (efecto dash simple)
+            const p1 = pts[i]; const n1 = frames.binormals[i]; const p2 = pts[i+1]; const n2 = frames.binormals[i+1];
             if(i % 2 === 0) {
-                const l1 = p1.clone().add(n1.clone().multiplyScalar(lw));
-                const r1 = p1.clone().add(n1.clone().multiplyScalar(-lw));
-                const l2 = p2.clone().add(n2.clone().multiplyScalar(lw));
-                const r2 = p2.clone().add(n2.clone().multiplyScalar(-lw));
-                
-                pushQuad(cV, [], 
-                    new THREE.Vector3(l1.x, l1.y+yOff, l1.z),
-                    new THREE.Vector3(r1.x, r1.y+yOff, r1.z),
-                    new THREE.Vector3(l2.x, l2.y+yOff, l2.z),
-                    new THREE.Vector3(r2.x, r2.y+yOff, r2.z)
-                );
+                const l1 = p1.clone().add(n1.clone().multiplyScalar(lw)); const r1 = p1.clone().add(n1.clone().multiplyScalar(-lw));
+                const l2 = p2.clone().add(n2.clone().multiplyScalar(lw)); const r2 = p2.clone().add(n2.clone().multiplyScalar(-lw));
+                pushQuad(cV, [], new THREE.Vector3(l1.x, l1.y+yOff, l1.z), new THREE.Vector3(r1.x, r1.y+yOff, r1.z), new THREE.Vector3(l2.x, l2.y+yOff, l2.z), new THREE.Vector3(r2.x, r2.y+yOff, r2.z));
             }
-
-            // Lateral Izquierda
-            let l1 = p1.clone().add(n1.clone().multiplyScalar(dist));
-            let r1 = p1.clone().add(n1.clone().multiplyScalar(dist + sw));
-            let l2 = p2.clone().add(n2.clone().multiplyScalar(dist));
-            let r2 = p2.clone().add(n2.clone().multiplyScalar(dist + sw));
-            pushQuad(sV, [], 
-                new THREE.Vector3(l1.x, l1.y+yOff, l1.z),
-                new THREE.Vector3(r1.x, r1.y+yOff, r1.z),
-                new THREE.Vector3(l2.x, l2.y+yOff, l2.z),
-                new THREE.Vector3(r2.x, r2.y+yOff, r2.z)
-            );
-
-            // Lateral Derecha
-            l1 = p1.clone().add(n1.clone().multiplyScalar(-dist));
-            r1 = p1.clone().add(n1.clone().multiplyScalar(-(dist + sw)));
-            l2 = p2.clone().add(n2.clone().multiplyScalar(-dist));
-            r2 = p2.clone().add(n2.clone().multiplyScalar(-(dist + sw)));
-            pushQuad(sV, [], 
-                new THREE.Vector3(l1.x, l1.y+yOff, l1.z),
-                new THREE.Vector3(r1.x, r1.y+yOff, r1.z),
-                new THREE.Vector3(l2.x, l2.y+yOff, l2.z),
-                new THREE.Vector3(r2.x, r2.y+yOff, r2.z)
-            );
+            let l1 = p1.clone().add(n1.clone().multiplyScalar(dist)); let r1 = p1.clone().add(n1.clone().multiplyScalar(dist + sw));
+            let l2 = p2.clone().add(n2.clone().multiplyScalar(dist)); let r2 = p2.clone().add(n2.clone().multiplyScalar(dist + sw));
+            pushQuad(sV, [], new THREE.Vector3(l1.x, l1.y+yOff, l1.z), new THREE.Vector3(r1.x, r1.y+yOff, r1.z), new THREE.Vector3(l2.x, l2.y+yOff, l2.z), new THREE.Vector3(r2.x, r2.y+yOff, r2.z));
+            l1 = p1.clone().add(n1.clone().multiplyScalar(-dist)); r1 = p1.clone().add(n1.clone().multiplyScalar(-(dist + sw)));
+            l2 = p2.clone().add(n2.clone().multiplyScalar(-dist)); r2 = p2.clone().add(n2.clone().multiplyScalar(-(dist + sw)));
+            pushQuad(sV, [], new THREE.Vector3(l1.x, l1.y+yOff, l1.z), new THREE.Vector3(r1.x, r1.y+yOff, r1.z), new THREE.Vector3(l2.x, l2.y+yOff, l2.z), new THREE.Vector3(r2.x, r2.y+yOff, r2.z));
         }
-
-        if(cV.length>0) {
-            const cg = new THREE.BufferGeometry(); cg.setAttribute('position', new THREE.Float32BufferAttribute(cV,3));
-            this.group.add(new THREE.Mesh(cg, matLineYellow));
-        }
-        if(sV.length>0) {
-            const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(sV,3));
-            this.group.add(new THREE.Mesh(sg, matLineWhite));
-        }
+        if(cV.length>0) this.group.add(new THREE.Mesh(createStripGeometry(cV), matLineYellow));
+        if(sV.length>0) this.group.add(new THREE.Mesh(createStripGeometry(sV), matLineWhite));
     }
 
     buildTerrain() {
@@ -397,26 +309,20 @@ class Chunk {
         const vs = [], cs = []; const col = new THREE.Color();
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
-
         for(let i=0; i<=div; i++) {
             const P = pts[i]; const N = frames.binormals[i];
             for(let j=0; j<=divW; j++) {
                 const u = (j/divW) - 0.5; const xOff = u * w;
                 const px = P.x + N.x * xOff; const pz = P.z + N.z * xOff;
                 let py = getTerrainHeight(px, pz);
-
                 if(py < -1) col.setHex(0xe6c288); else if(py < 10) col.setHex(0x2e7d32); else col.setHex(0x5d4037);
-
-                // Hundir terreno bajo carretera para evitar clipping con asfalto
                 if(Math.abs(xOff) < CONFIG.ROAD_WIDTH_HALF + 5) py = Math.min(py, P.y - 8);
-                
                 vs.push(px, py, pz); cs.push(col.r, col.g, col.b);
             }
         }
         const g = createGridGeometry(vs, cs, div, divW);
         const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({vertexColors: true, flatShading: true}));
         m.receiveShadow = true; this.group.add(m);
-
         const mid = this.curve.getPointAt(0.5);
         const wa = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), matWater);
         wa.rotation.x = -Math.PI/2; wa.position.set(mid.x, -2, mid.z);
@@ -424,23 +330,19 @@ class Chunk {
     }
 
     buildProps() {
-        // Pilares corregidos (Sin sobresalir)
+        // Pilares corregidos (Más bajos para evitar clipping)
         for(let i=0; i<=1; i+=0.15) {
             const p = this.curve.getPointAt(i);
             const th = getTerrainHeight(p.x, p.z);
-            // Solo generar si hay altura suficiente
             if(p.y > th + 4) {
-                // El tope del pilar es P.y (base asfalto)
-                // La base del pilar es th (terreno)
-                const height = p.y - th; 
-                const pil = new THREE.Mesh(new THREE.BoxGeometry(6, height, 4), matPillar);
-                // Posición Y = Terreno + Mitad altura
-                pil.position.set(p.x, th + height/2, p.z);
+                // RESTAMOS 0.5 A LA ALTURA SUPERIOR
+                const h = (p.y - 0.5) - th; 
+                const pil = new THREE.Mesh(new THREE.BoxGeometry(6, h, 4), matPillar);
+                pil.position.set(p.x, th + h/2, p.z);
                 pil.castShadow = true;
                 this.group.add(pil);
             }
         }
-        // Árboles
         for(let i=0; i<8; i++) {
             const t = rng(); const side = rng() > 0.5 ? 1 : -1; const dist = CONFIG.ROAD_WIDTH_HALF + 15 + rng() * 60;
             const p = this.curve.getPointAt(t); const tan = this.curve.getTangentAt(t);
@@ -456,6 +358,44 @@ class Chunk {
             }
         }
     }
+
+    buildClouds() {
+        // Nubes procedurales (Cúmulos Low Poly)
+        if (rng() > 0.4) { // 60% probabilidad de nube por chunk
+            const cloud = new THREE.Group();
+            const segs = 3 + Math.floor(rng() * 4);
+            for(let i=0; i<segs; i++) {
+                const size = 5 + rng() * 8;
+                const m = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), matCloud);
+                m.position.set((rng()-0.5)*15, (rng()-0.5)*5, (rng()-0.5)*15);
+                m.castShadow = true;
+                cloud.add(m);
+            }
+            const p = this.curve.getPointAt(0.5);
+            cloud.position.set(p.x + (rng()-0.5)*300, 40 + rng()*40, p.z + (rng()-0.5)*300);
+            this.group.add(cloud);
+        }
+    }
+
+    buildAtmosphere() {
+        // Partículas atmosféricas aleatorias (Sin sync, client side puro)
+        const pGeo = new THREE.BufferGeometry();
+        const pPos = [];
+        const count = 50; 
+        for(let i=0; i<count; i++) {
+            const t = Math.random(); // Random local, no rng()
+            const p = this.curve.getPointAt(t);
+            pPos.push(
+                p.x + (Math.random()-0.5) * 100,
+                p.y + Math.random() * 30,
+                p.z + (Math.random()-0.5) * 100
+            );
+        }
+        pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
+        const parts = new THREE.Points(pGeo, matAtmosphere);
+        this.group.add(parts);
+    }
+
     dispose() { scene.remove(this.group); this.group.traverse(o => { if(o.geometry) o.geometry.dispose(); }); }
 }
 
@@ -467,7 +407,6 @@ function pushQuad(verts, norms, tl, bl, tr, br, norm) {
         for(let k=0; k<6; k++) norms.push(norm.x, norm.y, norm.z);
     }
 }
-
 function createStripGeometry(verts, norms) {
     const g = new THREE.BufferGeometry();
     const idx = [];
@@ -478,7 +417,6 @@ function createStripGeometry(verts, norms) {
     g.setIndex(idx);
     return g;
 }
-
 function createGridGeometry(verts, colors, rows, cols) {
     const g = new THREE.BufferGeometry(); const idx = [];
     for(let i=0; i<rows; i++) for(let j=0; j<cols; j++) {
@@ -495,26 +433,18 @@ function createGridGeometry(verts, colors, rows, cols) {
 // ==========================================
 // VEHÍCULO
 // ==========================================
-function createOutline(geo, scale) {
-    const m = new THREE.Mesh(geo, matOutline); m.scale.multiplyScalar(scale); return m;
-}
-
+function createOutline(geo, scale) { const m = new THREE.Mesh(geo, matOutline); m.scale.multiplyScalar(scale); return m; }
 function createCar(colorStr) {
     const car = new THREE.Group();
     const matBody = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorStr), roughness: 0.2, metalness: 0.6 });
-
     const bGeo = new THREE.BoxGeometry(2.0, 0.7, 4.2);
     const body = new THREE.Mesh(bGeo, matBody); body.position.y = 0.6; body.castShadow = true; car.add(body);
     car.add(createOutline(bGeo, 1.03).translateY(0.6));
-
     const cGeo = new THREE.BoxGeometry(1.6, 0.5, 2.0);
-    const cab = new THREE.Mesh(cGeo, new THREE.MeshStandardMaterial({color:0x111111})); 
-    cab.position.set(0, 1.2, -0.2); car.add(cab);
+    const cab = new THREE.Mesh(cGeo, new THREE.MeshStandardMaterial({color:0x111111})); cab.position.set(0, 1.2, -0.2); car.add(cab);
     car.add(createOutline(cGeo, 1.03).translateY(1.2).translateZ(-0.2));
-
     const sGeo = new THREE.BoxGeometry(2.2, 0.1, 0.6);
     const sp = new THREE.Mesh(sGeo, new THREE.MeshStandardMaterial({color:0x111111})); sp.position.set(0, 1.3, -2.0); car.add(sp);
-
     const wGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16).rotateZ(Math.PI/2);
     const matW = new THREE.MeshStandardMaterial({color:0x222222});
     [[1, 1.3], [-1, 1.3], [1, -1.3], [-1, -1.3]].forEach(p => {
@@ -563,14 +493,10 @@ function updateWorldState(data) {
         if(trackInfo) {
             const finalPos = trackInfo.pos.clone();
             finalPos.add(trackInfo.right.multiplyScalar(pData.l)); 
-            
-            // Altura Ajustada: El coche flota sobre el asfalto (y=0)
             finalPos.y += 0.05; 
-
             playerObj.mesh.position.lerp(finalPos, 0.3);
             const lookTarget = finalPos.clone().add(trackInfo.tan);
             playerObj.mesh.lookAt(lookTarget);
-
             if(pid === state.myId) {
                 ui.speed.innerText = Math.floor(pData.s * 100);
                 const offset = new THREE.Vector3(0, 6, -12); offset.applyQuaternion(playerObj.mesh.quaternion);
@@ -580,7 +506,6 @@ function updateWorldState(data) {
                 if(distToEnd < 600) spawnChunk();
                 if(chunks.length > CONFIG.VISIBLE_CHUNKS) { chunks[0].dispose(); chunks.shift(); }
             }
-            
             if(pData.s > 0.3 && Math.random() > 0.7) {
                 const s = new THREE.Mesh(new THREE.DodecahedronGeometry(0.3,0), new THREE.MeshStandardMaterial({color:0xaaaaaa, transparent:true, opacity:0.4}));
                 s.position.copy(playerObj.mesh.position).add(new THREE.Vector3((Math.random()-0.5), 0.2, -2));
@@ -591,10 +516,19 @@ function updateWorldState(data) {
     });
 }
 
+// COLORES PARA EL CICLO
+const cDay = new THREE.Color(0x87CEEB);
+const cSunset = new THREE.Color(0xff8c00); // Naranja fuerte
+const cNight = new THREE.Color(0x050510);
+const cAmbientDay = new THREE.Color(0x404040);
+const cAmbientNight = new THREE.Color(0x111111);
+
 function animate() {
     requestAnimationFrame(animate);
     if(state.inGame) {
         socket.emit('playerInput', state.input);
+        
+        // CICLO DÍA / NOCHE SUAVE
         const time = Date.now() * 0.0001;
         if(state.players[state.myId]) {
             const carPos = state.players[state.myId].mesh.position;
@@ -602,9 +536,38 @@ function animate() {
             sunLight.target.position.copy(carPos); sunMesh.position.copy(sunLight.position);
             moonLight.position.set(carPos.x - Math.cos(time)*1000, -Math.sin(time)*1000, carPos.z);
             moonMesh.position.copy(moonLight.position);
-            if(Math.sin(time) > 0) { scene.background = new THREE.Color(0x87CEEB); scene.fog.color.setHex(0x87CEEB); starField.material.opacity = 0; } 
-            else { scene.background = new THREE.Color(0x050510); scene.fog.color.setHex(0x050510); starField.material.opacity = 1; starField.position.copy(carPos); }
+
+            const sin = Math.sin(time);
+            let targetColor = new THREE.Color();
+            
+            // Interpolación de colores del cielo
+            if (sin > 0.2) { // Día Pleno
+                targetColor.copy(cDay);
+                starField.material.opacity = 0;
+                ambientLight.color.copy(cAmbientDay);
+            } else if (sin < -0.2) { // Noche Plena
+                targetColor.copy(cNight);
+                starField.material.opacity = 1;
+                ambientLight.color.copy(cAmbientNight);
+            } else { // Transición (Amanecer / Atardecer)
+                const t = (sin + 0.2) / 0.4; // Normalizar a 0-1
+                if (sin > 0) { // Amanecer/Atardecer hacia día
+                    targetColor.copy(cSunset).lerp(cDay, t);
+                    starField.material.opacity = 1 - t;
+                } else { // Atardecer hacia noche
+                    targetColor.copy(cNight).lerp(cSunset, t);
+                    starField.material.opacity = 1 - t;
+                }
+                ambientLight.color.copy(cAmbientNight).lerp(cAmbientDay, t);
+            }
+
+            scene.background = targetColor;
+            scene.fog.color.copy(targetColor);
+            
+            // Estrellas siguen al jugador para no salirse
+            starField.position.copy(carPos);
         }
+
         for(let i=smokeParticles.length-1; i>=0; i--) {
             const p = smokeParticles[i]; p.position.add(p.userData.vel); p.scale.addScalar(0.05); p.userData.life -= 0.02; p.material.opacity = p.userData.life * 0.4;
             if(p.userData.life <= 0) { smokeGroup.remove(p); smokeParticles.splice(i, 1); }
