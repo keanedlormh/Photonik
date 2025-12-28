@@ -5,114 +5,85 @@ const server = http.createServer(app);
 const { Server } = require("socket.io");
 const io = new Server(server);
 
+// Servir archivos estáticos de la carpeta 'public'
 app.use(express.static('public'));
 
-// ==========================================
-// MOTOR DE FÍSICA (SERVER SIDE)
-// ==========================================
-class Vector3 {
-    constructor(x=0,y=0,z=0) { this.x=x; this.y=y; this.z=z; }
-    add(v) { this.x+=v.x; this.y+=v.y; this.z+=v.z; return this; }
-    clone() { return new Vector3(this.x, this.y, this.z); }
-    multiplyScalar(s) { this.x*=s; this.y*=s; this.z*=s; return this; }
-    dot(v) { return this.x*v.x + this.y*v.y + this.z*v.z; }
-    normalize() {
-        const l = Math.sqrt(this.x*this.x+this.y*this.y+this.z*this.z);
-        if(l>0) this.multiplyScalar(1/l);
-        return this;
-    }
-    crossVectors(a, b) {
-        this.x = a.y * b.z - a.z * b.y;
-        this.y = a.z * b.x - a.x * b.z;
-        this.z = a.x * b.y - a.y * b.x;
-        return this;
-    }
-}
-
-// Configuración Global
+// CONFIGURACIÓN FÍSICA
 const BASE_SPEED = 0.45;
 const ROAD_WIDTH_HALF = 8.5;
 const CAR_WIDTH_HALF = 1.0;
 const WALL_LIMIT = ROAD_WIDTH_HALF - CAR_WIDTH_HALF - 0.2;
 
-// Estado del Servidor
-const rooms = {}; // { roomId: { players: {}, config: {}, trackSeed: 123 } }
+const rooms = {}; 
 
 function getTrackCurvePoint(dist, seed) {
     const curvature = Math.sin(dist * 0.01 + seed) * 0.5 + Math.sin(dist * 0.003 + seed) * 0.2;
     const angle = curvature; 
     const x = Math.sin(angle);
     const z = Math.cos(angle); 
-    
-    const tangent = new Vector3(x, 0, z).normalize();
-    const up = new Vector3(0,1,0);
-    const right = new Vector3().crossVectors(tangent, up).normalize();
-    
-    return { tangent, right };
+    return { 
+        tangent: { x: x, y: 0, z: z }, // Simplificado para JS vainilla
+        right: { x: z, y: 0, z: -x }   // Cross product simplificado (UP es 0,1,0)
+    };
 }
 
 io.on('connection', (socket) => {
-    console.log('Jugador conectado:', socket.id);
+    console.log('Nuevo jugador:', socket.id);
 
-    // Listar Salas
     socket.on('getRooms', () => {
-        const roomList = [];
-        for (const id in rooms) {
-            const r = rooms[id];
-            roomList.push({
-                id: r.id,
-                players: Object.keys(r.players).length,
-                config: r.config
-            });
-        }
-        socket.emit('roomList', roomList);
+        const list = Object.values(rooms).map(r => ({
+            id: r.id,
+            players: Object.keys(r.players).length,
+            config: r.config
+        }));
+        socket.emit('roomList', list);
     });
 
-    // Crear Sala
     socket.on('createRoom', (data) => {
-        const roomId = Math.random().toString(36).substring(7).toUpperCase(); // Códigos mayúsculas más cortos
+        const roomId = Math.random().toString(36).substr(2, 4).toUpperCase();
         rooms[roomId] = {
             id: roomId,
-            host: socket.id,
             players: {},
-            config: {
-                maxKmhLimit: data.maxKmh || 500,
-                accelKmhPerSec: data.accel || 40
-            },
+            config: { maxKmhLimit: data.maxKmh, accelKmhPerSec: data.accel },
             trackSeed: Math.random() * 1000
         };
         socket.emit('roomCreated', { roomId, seed: rooms[roomId].trackSeed });
-        joinPlayerToRoom(socket, roomId);
+        joinPlayer(socket, roomId);
     });
 
-    // Unirse a Sala
     socket.on('joinRoom', (roomId) => {
-        roomId = roomId.toUpperCase(); // Normalizar input
+        roomId = roomId.toUpperCase();
         if (rooms[roomId]) {
-            socket.emit('roomJoined', { 
-                roomId, 
-                config: rooms[roomId].config, 
-                seed: rooms[roomId].trackSeed 
-            });
-            joinPlayerToRoom(socket, roomId);
+            socket.emit('roomJoined', { roomId, config: rooms[roomId].config, seed: rooms[roomId].trackSeed });
+            joinPlayer(socket, roomId);
         } else {
             socket.emit('error', 'Sala no encontrada');
         }
     });
 
     socket.on('playerInput', (input) => {
-        const player = getPlayer(socket.id);
-        if (player) {
-            player.input = input; 
+        // Buscar en qué sala está el jugador
+        for (const rid in rooms) {
+            if (rooms[rid].players[socket.id]) {
+                rooms[rid].players[socket.id].input = input;
+                break;
+            }
         }
     });
 
     socket.on('disconnect', () => {
-        removePlayer(socket.id);
+        for (const rid in rooms) {
+            if (rooms[rid].players[socket.id]) {
+                delete rooms[rid].players[socket.id];
+                io.to(rid).emit('playerLeft', socket.id);
+                if (Object.keys(rooms[rid].players).length === 0) delete rooms[rid];
+                break;
+            }
+        }
     });
 });
 
-function joinPlayerToRoom(socket, roomId) {
+function joinPlayer(socket, roomId) {
     const color = '#' + Math.floor(Math.random()*16777215).toString(16);
     rooms[roomId].players[socket.id] = {
         id: socket.id,
@@ -126,78 +97,57 @@ function joinPlayerToRoom(socket, roomId) {
     socket.join(roomId);
 }
 
-function getPlayer(socketId) {
-    for (const rid in rooms) {
-        if (rooms[rid].players[socketId]) return rooms[rid].players[socketId];
-    }
-    return null;
-}
-
-function removePlayer(socketId) {
-    for (const rid in rooms) {
-        if (rooms[rid].players[socketId]) {
-            delete rooms[rid].players[socketId];
-            io.to(rid).emit('playerLeft', socketId);
-            if (Object.keys(rooms[rid].players).length === 0) {
-                delete rooms[rid]; 
-            }
-            break;
-        }
-    }
-}
-
-// GAME LOOP (60 FPS)
+// BUCLE DE FÍSICA (60 Hz)
 setInterval(() => {
     for (const rid in rooms) {
-        const room = rooms[rid];
-        const stateUpdate = [];
-
-        for (const pid in room.players) {
-            const p = room.players[pid];
+        const r = rooms[rid];
+        const pack = [];
+        
+        for (const pid in r.players) {
+            const p = r.players[pid];
             
-            const internalMaxSpeed = BASE_SPEED * (room.config.maxKmhLimit / 100.0);
-            const accelDelta = (BASE_SPEED * (room.config.accelKmhPerSec / 100.0)) / 60.0;
+            // FÍSICA SIMPLIFICADA EN SERVIDOR
+            const maxSpeed = BASE_SPEED * (r.config.maxKmhLimit / 100);
+            const accel = (BASE_SPEED * (r.config.accelKmhPerSec / 100)) / 60;
 
             if (p.input.gas) {
-                if (p.manualSpeed < internalMaxSpeed) p.manualSpeed += accelDelta;
+                if (p.manualSpeed < maxSpeed) p.manualSpeed += accel;
             } else if (p.input.brake) {
-                p.manualSpeed -= accelDelta * 2.0;
+                p.manualSpeed -= accel * 2;
             } else {
                 p.manualSpeed *= 0.99;
             }
             if (p.manualSpeed < 0) p.manualSpeed = 0;
 
-            let turnSens = 0.04; 
-            const kmh = p.manualSpeed * 100;
-            if(kmh < 60) turnSens = 0.06;
-            else if(kmh > 320) turnSens = 0.012;
-            else turnSens = 0.035;
+            let sens = 0.04; 
+            // Lógica simple de giro server-side
+            p.worldHeading += p.input.steer * sens;
 
-            p.worldHeading += p.input.steer * turnSens;
-
-            const trackData = getTrackCurvePoint(p.trackDist, room.trackSeed);
+            const curve = getTrackCurvePoint(p.trackDist, r.trackSeed);
             
-            if (trackData) {
-                const moveX = Math.sin(p.worldHeading) * p.manualSpeed;
-                const moveZ = Math.cos(p.worldHeading) * p.manualSpeed;
-                const moveVec = new Vector3(moveX, 0, moveZ);
+            // Proyección de movimiento
+            // Movemos según heading del coche
+            const mx = Math.sin(p.worldHeading) * p.manualSpeed;
+            const mz = Math.cos(p.worldHeading) * p.manualSpeed;
+            
+            // Proyectar sobre vectores de la pista
+            // Dot Product manual
+            const fwd = mx * curve.tangent.x + mz * curve.tangent.z;
+            const lat = mx * curve.right.x + mz * curve.right.z;
 
-                const fwd = moveVec.dot(trackData.tangent);
-                const lat = moveVec.dot(trackData.right);
+            p.trackDist += fwd;
+            p.lateralOffset += lat;
 
-                p.trackDist += fwd;
-                p.lateralOffset += lat;
-
-                if (Math.abs(p.lateralOffset) > WALL_LIMIT) {
-                    const roadAngle = Math.atan2(trackData.tangent.x, trackData.tangent.z);
-                    // Rebote simplificado server-side
-                    p.lateralOffset = Math.sign(p.lateralOffset) * (WALL_LIMIT - 0.1);
-                    p.manualSpeed *= 0.8;
-                    p.worldHeading = roadAngle - (p.worldHeading - roadAngle) * 0.3;
-                }
+            // Colisión Pared
+            if (Math.abs(p.lateralOffset) > WALL_LIMIT) {
+                p.lateralOffset = Math.sign(p.lateralOffset) * (WALL_LIMIT - 0.1);
+                p.manualSpeed *= 0.8;
+                // Rebote simple de ángulo
+                const roadAngle = Math.atan2(curve.tangent.x, curve.tangent.z);
+                p.worldHeading = roadAngle - (p.worldHeading - roadAngle) * 0.5;
             }
 
-            stateUpdate.push({
+            pack.push({
                 id: p.id,
                 dist: p.trackDist,
                 lat: p.lateralOffset,
@@ -206,11 +156,10 @@ setInterval(() => {
                 color: p.color
             });
         }
-        io.to(rid).emit('gameState', stateUpdate);
+        io.to(rid).emit('gameState', pack);
     }
-}, 1000 / 60);
+}, 1000/60);
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Servidor corriendo en puerto ${PORT}`);
+server.listen(3000, () => {
+    console.log('✅ SERVIDOR LISTO: Abre http://localhost:3000 en tu navegador');
 });
