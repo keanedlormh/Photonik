@@ -12,7 +12,7 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Configuración Físicas Servidor
+// Configuración de Servidor
 const CONFIG = {
     FPS: 60,
     BASE_SPEED: 0.8, 
@@ -22,9 +22,8 @@ const CONFIG = {
 const rooms = {}; 
 
 io.on('connection', (socket) => {
-    console.log(`[NET] Cliente conectado: ${socket.id}`);
+    console.log(`[NET] Cliente: ${socket.id}`);
 
-    // Listar salas
     socket.on('getRooms', () => {
         const list = [];
         for (const rid in rooms) {
@@ -33,7 +32,7 @@ io.on('connection', (socket) => {
                 list.push({ 
                     id: r.id, 
                     players: Object.keys(r.players).length,
-                    config: r.config
+                    config: r.config 
                 });
             } else {
                 delete rooms[rid];
@@ -42,24 +41,19 @@ io.on('connection', (socket) => {
         socket.emit('roomList', list);
     });
 
-    // Crear sala
     socket.on('createRoom', (data) => {
         const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
-        
         rooms[roomId] = {
             id: roomId,
             players: {},
             config: { maxKmh: data.maxKmh || 500 },
-            // SEMILLA MAESTRA: Sincroniza el mundo procedural
-            seed: Math.floor(Math.random() * 99999) + 1 
+            // SEMILLA VITAL: Determina todo el mundo procedural
+            seed: Math.floor(Math.random() * 999999) + 1 
         };
-        
-        console.log(`[SALA] ${roomId} creada. Seed: ${rooms[roomId].seed}`);
         socket.emit('roomCreated', { roomId, seed: rooms[roomId].seed });
         joinPlayer(socket, roomId);
     });
 
-    // Unirse
     socket.on('joinRoom', (roomId) => {
         if(!roomId) return;
         roomId = roomId.toUpperCase();
@@ -74,7 +68,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Input
     socket.on('playerInput', (input) => {
         const rid = socket.data.room;
         if (rid && rooms[rid] && rooms[rid].players[socket.id]) {
@@ -96,7 +89,7 @@ function joinPlayer(socket, roomId) {
     socket.data.room = roomId;
     socket.join(roomId);
 
-    // Color aleatorio
+    // Color aleatorio HSL para el coche
     const hue = Math.floor(Math.random() * 360);
     
     rooms[roomId].players[socket.id] = {
@@ -109,7 +102,7 @@ function joinPlayer(socket, roomId) {
     };
 }
 
-// Bucle Físico Servidor
+// Bucle Físico
 setInterval(() => {
     for (const rid in rooms) {
         const r = rooms[rid];
@@ -118,16 +111,14 @@ setInterval(() => {
         for (const pid in r.players) {
             const p = r.players[pid];
             
-            // Lógica simplificada de movimiento para servidor
+            // Físicas básicas servidor (Autoridad ligera)
             const targetSpeed = p.input.gas ? CONFIG.BASE_SPEED : (p.input.brake ? 0 : p.speed * 0.98);
-            
             if(p.speed < targetSpeed) p.speed += 0.015;
             else p.speed -= 0.03;
             if(p.speed < 0) p.speed = 0;
 
             const steerForce = p.input.steer * p.speed * 0.12;
             p.lat -= steerForce; 
-
             p.dist += p.speed;
 
             if (Math.abs(p.lat) > CONFIG.WALL_LIMIT) {
@@ -143,12 +134,9 @@ setInterval(() => {
                 c: p.color
             });
         }
-        
         io.to(rid).volatile.emit('u', updateData);
     }
 }, 1000 / CONFIG.FPS);
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`SERVIDOR OK EN PUERTO ${PORT}`);
-});
+server.listen(PORT, () => { console.log(`SERVIDOR OK ${PORT}`); });
