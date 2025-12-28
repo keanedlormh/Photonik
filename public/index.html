@@ -2,601 +2,466 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-    <title>Photonik Racer Online</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Photonik Racer</title>
     
-    <!-- Carga Socket.IO desde el servidor -->
-    <script src="/socket.io/socket.io.js"></script>
+    <!-- 1. CARGA SEGURA DE SOCKET.IO (CDN) -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+    <!-- 2. MAPA DE IMPORTACIONES (Para Three.js moderno) -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <!-- 3. SISTEMA DE ERRORES VISUAL (Emergencia) -->
+    <script>
+        window.onerror = function(msg, url, line, col, error) {
+            const el = document.getElementById('fatal-error');
+            if(el) {
+                el.style.display = 'block';
+                el.innerHTML += `<p>❌ <b>ERROR:</b> ${msg}<br><small>${url}:${line}</small></p>`;
+            }
+            return false; 
+        };
+        
+        // Log seguro
+        function sysLog(msg, color='white') {
+            const consoleEl = document.getElementById('console-log');
+            if(consoleEl) {
+                const span = document.createElement('div');
+                span.style.color = color;
+                span.innerHTML = `> ${msg}`;
+                consoleEl.appendChild(span);
+                consoleEl.scrollTop = consoleEl.scrollHeight;
+            }
+            console.log(`[SYS] ${msg}`);
+        }
+    </script>
 
     <style>
-        body { margin: 0; overflow: hidden; background: #000; color: white; font-family: 'Segoe UI', sans-serif; user-select: none; }
-
-        /* DEBUG CONSOLE */
-        #debug-console-container {
-            position: absolute; top: 10px; left: 10px; width: 300px;
-            background: rgba(0,0,0,0.8); border: 1px solid #444; z-index: 1000;
-            font-family: monospace; font-size: 11px;
-            pointer-events: none; /* Dejar pasar clics si no se interactúa */
-        }
-        #console-header { background: #222; padding: 5px; color: #8f8; cursor: pointer; display: flex; justify-content: space-between; pointer-events: auto; }
-        #console-body { height: 150px; overflow-y: auto; padding: 5px; color: #ccc; pointer-events: auto; }
+        body { margin: 0; overflow: hidden; background: #050510; color: white; font-family: 'Segoe UI', sans-serif; user-select: none; }
         
-        /* START SCREEN */
-        #start-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(135deg, #050510 0%, #202030 100%); z-index: 500; display: flex; align-items: center; justify-content: center; flex-direction: column; }
-        #intro-panel, #lobby-ui { display: flex; flex-direction: column; align-items: center; gap: 20px; width: 100%; max-width: 400px; transition: opacity 0.5s; }
-        h1 { font-size: 3.5rem; margin: 0; background: -webkit-linear-gradient(#fff, #4488ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 2px; text-shadow: 0 0 30px rgba(68,136,255,0.5); }
+        /* PANTALLA DE ERROR */
+        #fatal-error { display: none; position: fixed; top: 0; left: 0; width: 100%; padding: 20px; background: rgba(100,0,0,0.9); color: white; z-index: 9999; font-family: monospace; border-bottom: 2px solid red; }
+
+        /* CONSOLA */
+        #debug-ui { position: absolute; top: 10px; left: 10px; z-index: 1000; width: 300px; pointer-events: none; }
+        #console-log { height: 100px; overflow-y: auto; background: rgba(0,0,0,0.5); font-size: 10px; padding: 5px; font-family: monospace; pointer-events: auto; }
+
+        /* UI PANTALLAS */
+        .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.5s; }
+        #screen-game { display: none; pointer-events: none; } /* El juego deja pasar eventos al canvas excepto controles */
         
-        .big-btn { padding: 15px 50px; font-size: 1.2rem; background: #ff3333; color: white; border: none; border-radius: 50px; cursor: pointer; transition: 0.2s; box-shadow: 0 0 20px #f006; font-weight: bold; letter-spacing: 1px; }
-        .big-btn:hover { transform: scale(1.05); box-shadow: 0 0 30px #f009; }
-        .big-btn:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(1); }
-
-        .action-btn { padding: 15px 30px; background: #3388ff; color: white; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; width: 100%; font-size: 1rem; }
-        .action-btn:hover { background: #4499ff; }
+        /* ESTILOS MENU */
+        h1 { font-size: 40px; text-shadow: 0 0 20px #0ff; margin-bottom: 30px; letter-spacing: 5px; background: linear-gradient(to right, #fff, #0ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;}
+        button { background: #222; border: 1px solid #444; color: white; padding: 15px 30px; font-size: 16px; margin: 10px; cursor: pointer; border-radius: 5px; transition: 0.2s; text-transform: uppercase; font-weight: bold; }
+        button:hover { background: #333; border-color: #fff; transform: scale(1.05); }
+        button.primary { background: #0066ff; border-color: #0088ff; box-shadow: 0 0 15px #0066ff88; }
         
-        .secondary-btn { padding: 10px 20px; background: #444; color: white; border: none; border-radius: 20px; cursor: pointer; margin-left: 10px; }
-        .code-input { padding: 12px; background: #222; border: 1px solid #555; color: white; text-align: center; border-radius: 10px; flex-grow: 1; font-size: 1rem; text-transform: uppercase; }
-        .separator { width: 100%; height: 1px; background: linear-gradient(90deg, transparent, #555, transparent); margin: 20px 0; }
-        .panel-section { width: 100%; display: flex; }
+        .panel { background: rgba(20,20,30,0.9); padding: 30px; border-radius: 20px; border: 1px solid #444; text-align: center; max-width: 400px; width: 90%; }
+        input { background: #111; border: 1px solid #555; color: white; padding: 10px; border-radius: 5px; text-align: center; width: 60%; font-size: 16px; margin-bottom: 10px; }
 
-        /* ROOM LIST */
-        #room-list-container { width: 100%; min-height: 100px; max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.4); border-radius: 10px; border: 1px solid #333; margin-top: 10px; }
-        .room-item { padding: 12px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; transition: background 0.2s; }
-        .room-item:hover { background: rgba(255,255,255,0.05); }
-        .room-item button { padding: 5px 15px; background: #38f; border: none; border-radius: 5px; color: white; cursor: pointer; font-weight: bold; }
-        .room-info { display: flex; flex-direction: column; }
-        .room-code { font-family: monospace; font-size: 1.2em; color: #fb3; }
-        .room-details { font-size: 0.8em; color: #aaa; }
+        /* LISTA SALAS */
+        #room-list { max-height: 200px; overflow-y: auto; margin-top: 20px; border-top: 1px solid #444; }
+        .room-row { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(255,255,255,0.05); margin-bottom: 5px; border-radius: 5px; }
+        .room-row button { padding: 5px 15px; font-size: 12px; margin: 0; }
 
-        /* HUD & GAME UI */
-        #ui-layer { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
-        #menu-btn { position: absolute; top: 20px; right: 20px; font-size: 30px; cursor: pointer; pointer-events: auto; filter: drop-shadow(0 0 5px black); }
-        #menu-modal { display: none; position: absolute; top: 60px; right: 20px; width: 250px; background: rgba(20,20,30,0.95); padding: 15px; border-radius: 10px; flex-direction: column; gap: 10px; pointer-events: auto; border: 1px solid #444; }
-        .menu-item { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
-        .title-sep { color: #888; font-size: 10px; border-bottom: 1px solid #444; margin-top: 5px; padding-bottom: 2px; text-transform: uppercase; letter-spacing: 1px; }
-
-        /* CONTROLS */
-        #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 140px; height: 140px; border: 2px solid rgba(255,255,255,0.15); border-radius: 50%; pointer-events: auto; touch-action: none; }
-        #joystick-knob { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255,50,50,0.8); border-radius: 50%; transform: translate(-50%,-50%); box-shadow: 0 0 10px #f00; }
-        .pedal { position: absolute; bottom: 40px; width: 80px; height: 160px; border: 2px solid rgba(255,255,255,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 30px; pointer-events: auto; cursor: pointer; user-select: none; touch-action: none; transition: transform 0.1s; }
-        .pedal:active { transform: scale(0.95); opacity: 0.8; }
-        #gas-btn { right: 40px; background: linear-gradient(to top, #600, #d00); }
-        #brake-btn { right: 140px; height: 100px; bottom: 40px; background: linear-gradient(to top, #222, #555); }
+        /* CONTROLES JUEGO */
+        #hud { position: absolute; inset: 0; pointer-events: none; }
+        .hud-el { pointer-events: auto; }
         
-        #hud-speed { position: absolute; bottom: 220px; right: 40px; text-align: right; text-shadow: 0 0 10px #000; }
-        #speed-val { font-size: 80px; font-weight: bold; color: #fff; font-family: 'Courier New', monospace; font-style: italic; }
-        small { color: #aaa; font-size: 20px; font-weight: bold; }
-
-        #loading { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 200; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 20px; }
-        .loader { width: 50px; height: 50px; border: 5px solid #333; border-top-color: #38f; border-radius: 50%; animation: rot 1s linear infinite; }
-        @keyframes rot { to { transform: rotate(360deg); } }
+        #joystick-area { position: absolute; bottom: 50px; left: 50px; width: 150px; height: 150px; border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; }
+        #joystick-dot { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: #f00; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 15px #f00; }
+        
+        #pedal-gas { position: absolute; bottom: 50px; right: 40px; width: 80px; height: 150px; background: linear-gradient(#400, #f00); border-radius: 10px; border: 2px solid #fff; display: grid; place-items: center; font-size: 30px; }
+        #pedal-brake { position: absolute; bottom: 50px; right: 140px; width: 70px; height: 100px; background: #444; border-radius: 10px; border: 2px solid #888; display: grid; place-items: center; font-size: 20px; }
+        
+        #speed-display { position: absolute; top: 20px; right: 20px; text-align: right; font-family: monospace; }
+        .big-num { font-size: 60px; font-weight: bold; color: #ff0; text-shadow: 0 0 10px #ff0; }
+        
+        #loading-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:black; z-index:2000; display:none; place-items: center; color: #0ff; font-family: monospace; font-size: 20px; }
     </style>
 </head>
 <body>
 
-<!-- CONSOLA DEBUG -->
-<div id="debug-console-container">
-    <div id="console-header">SYSTEM LOG <span id="toggle-console">_</span></div>
-    <div id="console-body"></div>
+<!-- ERROR CATCHER -->
+<div id="fatal-error"></div>
+
+<!-- CONSOLA -->
+<div id="debug-ui">
+    <div style="background:#222; color:#0f0; padding:2px;">SYSTEM LOG</div>
+    <div id="console-log"></div>
 </div>
 
-<!-- LOBBY & MENU -->
-<div id="start-screen">
-    <div id="intro-panel">
+<!-- PANTALLA 1: LOGIN -->
+<div id="screen-login" class="screen" style="z-index: 10;">
+    <div class="panel">
         <h1>PHOTONIK</h1>
-        <p style="color:#88f; letter-spacing:4px;">ONLINE MULTIPLAYER</p>
-        <br>
-        <button id="btn-connect" class="big-btn">CONECTAR A SERVIDOR</button>
-        <div id="connection-status" style="margin-top:15px; color:#666; font-size:12px; font-family:monospace;">Estado: Esperando acción...</div>
+        <p style="color:#888; margin-bottom:20px;">MULTIPLAYER RACER</p>
+        <button id="btn-start" class="primary">CONECTAR A SERVIDOR</button>
+        <p id="status-text" style="font-size:12px; margin-top:15px; color:yellow;">Esperando...</p>
     </div>
+</div>
 
-    <!-- Panel Lobby -->
-    <div id="lobby-ui" style="display:none;">
-        <h2 style="color:white;">SALA DE ESPERA</h2>
+<!-- PANTALLA 2: LOBBY -->
+<div id="screen-lobby" class="screen" style="display:none; z-index: 9;">
+    <div class="panel">
+        <h2>SALA DE ESPERA</h2>
+        <button id="btn-create" class="primary" style="width:100%">CREAR NUEVA PARTIDA</button>
+        <div style="margin: 20px 0; border-top:1px solid #555;"></div>
         
-        <div class="panel-section">
-            <button id="btn-create-room" class="action-btn">✨ CREAR NUEVA PARTIDA</button>
-        </div>
-
-        <div class="separator"></div>
-
-        <div class="panel-section">
-            <input type="text" id="room-code-input" placeholder="CÓDIGO..." class="code-input">
-            <button id="btn-join-code" class="secondary-btn">ENTRAR</button>
-            <button id="btn-refresh" class="secondary-btn">↻</button>
-        </div>
-
-        <div id="room-list-container">
-            <div style="padding:20px; text-align:center; color:#888;">Pulsa refrescar para buscar partidas...</div>
+        <input type="text" id="inp-code" placeholder="CÓDIGO SALA">
+        <button id="btn-join">ENTRAR</button>
+        <button id="btn-refresh">🔄</button>
+        
+        <div id="room-list">
+            <div style="padding:10px; color:#666">Buscando...</div>
         </div>
     </div>
 </div>
 
-<!-- CARGA -->
-<div id="loading">
-    <span class="loader"></span>
-    <div style="color:#fff; font-family:monospace;">GENERANDO MUNDO PROCEDURAL...</div>
-</div>
-
-<!-- HUD -->
-<div id="ui-layer">
-    <div id="hud-speed"><span id="speed-val">0</span><small> KM/H</small></div>
-    
-    <div id="manual-controls">
-        <div id="joystick-zone"><div id="joystick-knob"></div></div>
-        <div id="brake-btn" class="pedal">🛑</div>
-        <div id="gas-btn" class="pedal">🚀</div>
-    </div>
-    
-    <div id="menu-btn">⚙️</div>
-    
-    <!-- Modal Configuración -->
-    <div id="menu-modal">
-        <div class="title-sep">ESTADÍSTICAS SALA</div>
-        <div class="menu-item"><span>Límite Vel.</span><span id="disp-max" class="val-display">--</span></div>
-        <div class="menu-item"><span>Aceleración</span><span id="disp-acc" class="val-display">--</span></div>
+<!-- PANTALLA 3: JUEGO -->
+<div id="screen-game" class="screen">
+    <div id="hud">
+        <div id="speed-display"><span class="big-num" id="speed-val">0</span> KM/H</div>
         
-        <div class="title-sep">MIS CONTROLES</div>
-        <div class="menu-item"><span>Invertir Giro</span><input type="checkbox" id="chk-invert"></div>
-        <div class="menu-item"><span>Mostrar Freno</span><input type="checkbox" id="chk-brake" checked></div>
-        
-        <div class="title-sep">CONFIG PARTIDA (ADMIN)</div>
-        <div class="menu-item"><span>Max Speed</span><input type="range" id="cfg-max" min="200" max="800" value="500" style="width:80px"></div>
-        <div class="menu-item"><span>Accel</span><input type="range" id="cfg-acc" min="20" max="80" value="40" style="width:80px"></div>
+        <!-- Controles Táctiles -->
+        <div id="joystick-area" class="hud-el"><div id="joystick-dot"></div></div>
+        <div id="pedal-brake" class="hud-el">🛑</div>
+        <div id="pedal-gas" class="hud-el">⚡</div>
     </div>
 </div>
 
-<!-- LÓGICA PRINCIPAL DEL JUEGO -->
+<div id="loading-overlay">CARGANDO MUNDO...</div>
+
+<!-- LÓGICA PRINCIPAL (MODULO) -->
 <script type="module">
-    // Importamos Three.js desde CDN (Módulos modernos)
-    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
-    import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
-    import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
-    import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
+    import * as THREE from 'three';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 
     // --- VARIABLES GLOBALES ---
     let socket;
-    let myId = null;
+    let myId;
     let inGame = false;
-    let myCar = null;
+    let gameLoopReq;
     
-    const players = {}; // Diccionario de mallas de jugadores
-    const state = { 
-        inputs: { steer: 0, gas: false, brake: false }, 
-        cfg: { invert: false },
-        mySpeed: 0
+    // Elementos DOM
+    const screens = {
+        login: document.getElementById('screen-login'),
+        lobby: document.getElementById('screen-lobby'),
+        game: document.getElementById('screen-game')
+    };
+    
+    // Estado Juego
+    const state = {
+        players: {},
+        myCar: null,
+        input: { steer: 0, gas: false, brake: false }
     };
 
-    // --- SISTEMA DE LOGS ---
-    const consoleBody = document.getElementById('console-body');
-    function log(msg, color = 'white') {
-        const d = document.createElement('div');
-        d.innerHTML = `<span style="color:#666">[SYS]</span> <span style="color:${color}">${msg}</span>`;
-        consoleBody.appendChild(d);
-        consoleBody.scrollTop = consoleBody.scrollHeight;
-        console.log(msg); // También a consola navegador
-    }
+    // --- 1. INICIALIZACIÓN ---
+    window.onload = () => {
+        sysLog("DOM Cargado. Inicializando...");
 
-    // --- INICIALIZACIÓN ---
-    // Esperamos a que cargue el DOM y verifiquemos librerías
-    window.addEventListener('load', () => {
-        log("Sistema iniciado. Comprobando dependencias...", "yellow");
-        
+        // Verificación crítica
         if (typeof io === 'undefined') {
-            log("ERROR CRÍTICO: Socket.IO no cargó. ¿Estás online?", "red");
-            document.getElementById('connection-status').innerText = "Error: Librería de red falló.";
-            document.getElementById('connection-status').style.color = "red";
-            return;
+            throw new Error("La librería Socket.IO no se ha cargado. Revisa tu conexión a internet.");
         }
 
-        log("Dependencias OK. Listo para conectar.", "#5f5");
-        
-        // Asignar eventos de botones (Ahora es seguro hacerlo)
-        document.getElementById('btn-connect').onclick = initNetwork;
-        document.getElementById('btn-create-room').onclick = requestCreateRoom;
-        document.getElementById('btn-refresh').onclick = requestRoomList;
-        document.getElementById('btn-join-code').onclick = () => {
-            const code = document.getElementById('room-code-input').value;
-            if(code) joinRoom(code);
+        // Bindings Botones
+        document.getElementById('btn-start').onclick = connectToServer;
+        document.getElementById('btn-create').onclick = () => socket.emit('createRoom', { maxKmh: 600 });
+        document.getElementById('btn-refresh').onclick = () => socket.emit('getRooms');
+        document.getElementById('btn-join').onclick = () => {
+            const code = document.getElementById('inp-code').value;
+            if(code) socket.emit('joinRoom', code);
         };
         
-        // UI Menú
-        document.getElementById('menu-btn').onclick = () => {
-            const m = document.getElementById('menu-modal');
-            m.style.display = m.style.display === 'flex' ? 'none' : 'flex';
+        // Exponer función de unirse para los botones generados dinámicamente
+        window.tryJoin = (id) => {
+            if(socket) socket.emit('joinRoom', id);
         };
-        document.getElementById('chk-invert').onchange = (e) => state.cfg.invert = e.target.checked;
-        document.getElementById('chk-brake').onchange = (e) => {
-            document.getElementById('brake-btn').style.display = e.target.checked ? 'flex' : 'none';
-        };
-    });
 
-    // --- RED Y SOCKETS ---
-    function initNetwork() {
-        const statusEl = document.getElementById('connection-status');
-        statusEl.innerText = "Conectando...";
-        statusEl.style.color = "yellow";
-        document.getElementById('btn-connect').disabled = true;
+        setupControls();
+    };
 
-        try {
-            // Conexión al mismo host que sirve la página
-            socket = io();
+    // --- 2. RED (SOCKET.IO) ---
+    function connectToServer() {
+        const btn = document.getElementById('btn-start');
+        const status = document.getElementById('status-text');
+        
+        btn.disabled = true;
+        status.innerText = "Intentando conectar...";
+        
+        // Conexión
+        socket = io({
+            transports: ['websocket', 'polling'], // Forzar métodos robustos
+            reconnectionAttempts: 5
+        });
 
-            socket.on('connect', () => {
-                log(`Conectado al servidor! ID: ${socket.id}`, '#0f0');
-                myId = socket.id;
-                
-                // Transición UI
-                document.getElementById('intro-panel').style.display = 'none';
-                document.getElementById('lobby-ui').style.display = 'flex';
-                requestRoomList();
-            });
-
-            socket.on('connect_error', (err) => {
-                log(`Error conexión: ${err.message}`, 'red');
-                statusEl.innerText = "Error de conexión.";
-                statusEl.style.color = "red";
-                document.getElementById('btn-connect').disabled = false;
-            });
-
-            socket.on('roomList', updateRoomList);
-            socket.on('roomCreated', (data) => {
-                log(`Sala creada: ${data.roomId}`, '#0ff');
-                startGame(data.seed);
-            });
+        socket.on('connect', () => {
+            sysLog(`Conectado! ID: ${socket.id}`, '#0f0');
+            myId = socket.id;
             
-            socket.on('roomJoined', (data) => {
-                log(`Unido a sala: ${data.roomId}`, '#0ff');
-                // Actualizar info visual
-                document.getElementById('disp-max').innerText = data.config.maxKmh || 500;
-                document.getElementById('disp-acc').innerText = data.config.accel || 40;
-                startGame(data.seed);
-            });
+            // Cambio pantalla
+            screens.login.style.display = 'none';
+            screens.lobby.style.display = 'flex';
+            socket.emit('getRooms');
+        });
 
-            socket.on('error', (msg) => {
-                alert("Error Servidor: " + msg);
-                log("Error Servidor: " + msg, "red");
-            });
+        socket.on('connect_error', (err) => {
+            sysLog(`Error Conexión: ${err.message}`, 'red');
+            status.innerText = "Fallo de conexión. Reintentando...";
+            status.style.color = "red";
+            btn.disabled = false;
+        });
 
-            socket.on('playerLeft', (id) => {
-                if (players[id]) {
-                    scene.remove(players[id]);
-                    delete players[id];
-                    log(`Jugador ${id} desconectado`, 'orange');
-                }
-            });
+        // Eventos Sala
+        socket.on('roomList', updateRoomList);
+        
+        socket.on('roomCreated', (data) => {
+            sysLog(`Sala creada: ${data.roomId}`, '#0ff');
+            startGame(data.seed);
+        });
+        
+        socket.on('roomJoined', (data) => {
+            sysLog(`Unido a sala: ${data.roomId}`, '#0ff');
+            startGame(data.seed);
+        });
 
-            // --- BUCLE DE JUEGO (RECEPCIÓN) ---
-            socket.on('u', (pack) => {
-                if (!inGame) return;
-                
-                pack.forEach(p => {
-                    let mesh = players[p.id];
-                    
-                    // Si el coche es nuevo, crearlo
-                    if (!mesh) {
-                        mesh = createCarMesh(p.c);
-                        scene.add(mesh);
-                        players[p.id] = mesh;
-
-                        if (p.id === myId) {
-                            myCar = mesh;
-                            // Añadir faros al propio coche
-                            const light = new THREE.SpotLight(0xffffff, 1000);
-                            light.position.set(0, 5, 0);
-                            light.target.position.set(0, 0, 20);
-                            light.angle = 0.5;
-                            light.penumbra = 0.5;
-                            mesh.add(light);
-                            mesh.add(light.target);
-                        }
-                    }
-
-                    // --- INTERPOLACIÓN Y POSICIONAMIENTO ---
-                    // En este prototipo simplificado, "proyectamos" los datos abstractos (dist, lat)
-                    // a coordenadas 3D simples (Z = distancia, X = lateral).
-                    // En un juego completo, aquí se usaría la curva para calcular X/Z reales.
-                    
-                    // Objetivo
-                    const targetPos = new THREE.Vector3(p.l, 0.6, p.d);
-                    const targetRot = p.h; // Heading en radianes
-
-                    // Lerp (Suavizado)
-                    mesh.position.lerp(targetPos, 0.3);
-                    
-                    // Rotación suave (corrección para evitar giros locos de 360 a 0)
-                    let rotDiff = targetRot - mesh.rotation.y;
-                    while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-                    while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-                    mesh.rotation.y += rotDiff * 0.3;
-
-                    // Guardar velocidad local si soy yo
-                    if (p.id === myId) state.mySpeed = p.s;
-                });
-
-                // Actualizar Cámara y HUD
-                if (myCar) {
-                    // HUD
-                    document.getElementById('speed-val').innerText = Math.floor(state.mySpeed * 100);
-                    
-                    // Cámara Third Person
-                    const offset = new THREE.Vector3(0, 6, -15);
-                    offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), myCar.rotation.y);
-                    const camPos = myCar.position.clone().add(offset);
-                    camera.position.lerp(camPos, 0.1);
-                    camera.lookAt(myCar.position.clone().add(new THREE.Vector3(0, 0, 10).applyAxisAngle(new THREE.Vector3(0, 1, 0), myCar.rotation.y)));
-                }
-            });
-
-        } catch (e) {
-            log("Excepción al conectar: " + e, "red");
-        }
+        socket.on('errorMsg', (msg) => alert(msg));
+        
+        // Evento Juego
+        socket.on('u', (data) => {
+            if(inGame) updateGameWorld(data);
+        });
+        
+        socket.on('playerLeft', (id) => {
+            if(state.players[id]) {
+                scene.remove(state.players[id].mesh);
+                delete state.players[id];
+            }
+        });
     }
-
-    function requestRoomList() {
-        if(socket) socket.emit('getRooms');
-    }
-
-    function requestCreateRoom() {
-        const max = parseInt(document.getElementById('cfg-max').value);
-        const acc = parseInt(document.getElementById('cfg-acc').value);
-        if(socket) socket.emit('createRoom', { maxKmh: max, accel: acc });
-    }
-
-    function joinRoom(id) {
-        if(socket) socket.emit('joinRoom', id);
-    }
-    
-    // Exponer join al global para los botones onclick generados dinámicamente
-    window.joinRoomGlobal = (id) => joinRoom(id);
 
     function updateRoomList(list) {
-        const cont = document.getElementById('room-list-container');
-        cont.innerHTML = '';
-        if (list.length === 0) {
-            cont.innerHTML = '<div style="padding:20px;text-align:center;color:#666">No hay partidas activas. ¡Crea una!</div>';
+        const container = document.getElementById('room-list');
+        container.innerHTML = '';
+        
+        if(list.length === 0) {
+            container.innerHTML = '<div style="padding:10px; color:#666">No hay partidas. ¡Crea una!</div>';
             return;
         }
-        
+
         list.forEach(r => {
             const div = document.createElement('div');
-            div.className = 'room-item';
+            div.className = 'room-row';
             div.innerHTML = `
-                <div class="room-info">
-                    <span class="room-code">SALA: ${r.id}</span> 
-                    <span class="room-details">Pilotos: ${r.players} | Max: ${r.config.maxKmh}km/h</span>
-                </div>
-                <button onclick="window.joinRoomGlobal('${r.id}')">ENTRAR</button>
+                <span><b>${r.id}</b> (${r.players} Jug)</span>
+                <button onclick="window.tryJoin('${r.id}')">ENTRAR</button>
             `;
-            cont.appendChild(div);
+            container.appendChild(div);
         });
     }
 
-    // --- CONTROLES TÁCTILES Y DE TECLADO ---
-    function sendInput() {
-        if (!inGame || !socket) return;
-        
-        let steerVal = state.inputs.steer;
-        if (state.cfg.invert) steerVal *= -1;
-        
-        // Enviar al servidor
-        socket.emit('playerInput', { 
-            steer: steerVal, 
-            gas: state.inputs.gas, 
-            brake: state.inputs.brake 
-        });
-    }
-
-    // Joystick Virtual
-    const joyZone = document.getElementById('joystick-zone');
-    const joyKnob = document.getElementById('joystick-knob');
-    let joyTouchId = null;
-    const joyRect = { w: 0, x: 0 };
-
-    function handleJoyMove(clientX) {
-        let dx = clientX - (joyRect.x + joyRect.w / 2);
-        // Clampar movimiento
-        if (dx > 50) dx = 50; 
-        if (dx < -50) dx = -50;
-        
-        joyKnob.style.transform = `translate(${dx - 25}px, -25px)`; // -25 por radio del knob
-        
-        // Normalizar de -1 a 1
-        state.inputs.steer = dx / 50; 
-        sendInput();
-    }
-
-    joyZone.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        const t = e.changedTouches[0];
-        joyTouchId = t.identifier;
-        const rect = joyZone.getBoundingClientRect();
-        joyRect.x = rect.left; 
-        joyRect.w = rect.width;
-        handleJoyMove(t.clientX);
-    });
-
-    joyZone.addEventListener('touchmove', (e) => {
-        e.preventDefault();
-        for (let i = 0; i < e.changedTouches.length; i++) {
-            if (e.changedTouches[i].identifier === joyTouchId) {
-                handleJoyMove(e.changedTouches[i].clientX);
-            }
-        }
-    });
-
-    joyZone.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        joyTouchId = null;
-        state.inputs.steer = 0;
-        joyKnob.style.transform = 'translate(-50%, -50%)'; // Reset centro
-        sendInput();
-    });
-
-    // Pedales
-    const bindPedal = (elemId, inputKey) => {
-        const el = document.getElementById(elemId);
-        const set = (val) => { state.inputs[inputKey] = val; sendInput(); };
-        
-        el.addEventListener('mousedown', (e) => { e.preventDefault(); set(true); });
-        el.addEventListener('mouseup', (e) => { e.preventDefault(); set(false); });
-        el.addEventListener('touchstart', (e) => { e.preventDefault(); set(true); });
-        el.addEventListener('touchend', (e) => { e.preventDefault(); set(false); });
-    };
-
-    bindPedal('gas-btn', 'gas');
-    bindPedal('brake-btn', 'brake');
-
-    // Teclado (Para pruebas en PC)
-    window.addEventListener('keydown', (e) => {
-        if(e.key === 'ArrowUp' || e.key === 'w') state.inputs.gas = true;
-        if(e.key === 'ArrowDown' || e.key === 's') state.inputs.brake = true;
-        if(e.key === 'ArrowLeft' || e.key === 'a') state.inputs.steer = -1;
-        if(e.key === 'ArrowRight' || e.key === 'd') state.inputs.steer = 1;
-        sendInput();
-    });
-    window.addEventListener('keyup', (e) => {
-        if(e.key === 'ArrowUp' || e.key === 'w') state.inputs.gas = false;
-        if(e.key === 'ArrowDown' || e.key === 's') state.inputs.brake = false;
-        if(e.key === 'ArrowLeft' || e.key === 'a') state.inputs.steer = 0;
-        if(e.key === 'ArrowRight' || e.key === 'd') state.inputs.steer = 0;
-        sendInput();
-    });
-
-    // --- MOTOR GRÁFICO (THREE.JS) ---
+    // --- 3. MOTOR GRÁFICO (THREE.JS) ---
     let scene, camera, renderer, composer;
 
     function startGame(seed) {
-        log("Iniciando motor gráfico...", "#f0f");
+        document.getElementById('loading-overlay').style.display = 'grid';
+        screens.lobby.style.display = 'none';
         
-        // Ocultar Lobby, mostrar Carga
-        document.getElementById('lobby-ui').style.display = 'none';
-        document.getElementById('start-screen').style.display = 'none';
-        document.getElementById('loading').style.display = 'flex';
-
-        // Setup Escena
+        // Init ThreeJS
         scene = new THREE.Scene();
-        scene.fog = new THREE.FogExp2(0x050510, 0.0025);
-
-        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 8000);
-        camera.position.set(0, 10, -20);
-
-        renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        scene.fog = new THREE.FogExp2(0x000000, 0.002);
+        
+        camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 2000);
+        
+        renderer = new THREE.WebGLRenderer({ antialias: false }); // False para rendimiento
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.shadowMap.enabled = true;
-        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMapping = THREE.ReinhardToneMapping;
         document.body.appendChild(renderer.domElement);
-
-        // Post-Processing (Bloom)
-        const renderPass = new RenderPass(scene, camera);
-        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-        bloomPass.threshold = 0.5;
-        bloomPass.strength = 0.4; // Brillo de neón
-        bloomPass.radius = 0.3;
         
+        // Post-Processing
         composer = new EffectComposer(renderer);
-        composer.addPass(renderPass);
-        composer.addPass(bloomPass);
+        composer.addPass(new RenderPass(scene, camera));
+        const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, innerHeight), 1.5, 0.4, 0.85);
+        bloom.threshold = 0;
+        bloom.strength = 0.6; // Neon intenso
+        bloom.radius = 0.5;
+        composer.addPass(bloom);
 
-        // Iluminación
-        const ambient = new THREE.AmbientLight(0x404040, 2);
-        scene.add(ambient);
+        // Environment
+        buildWorld(seed);
+
+        // Start Loop
+        inGame = true;
+        animate();
         
-        const sun = new THREE.DirectionalLight(0xffaa00, 2);
-        sun.position.set(100, 200, 100);
-        sun.castShadow = true;
-        sun.shadow.mapSize.width = 2048;
-        sun.shadow.mapSize.height = 2048;
-        sun.shadow.camera.near = 0.5;
-        sun.shadow.camera.far = 500;
-        scene.add(sun);
-
-        // Entorno
-        createEnvironment(seed);
-
-        // Retardo para quitar pantalla de carga
         setTimeout(() => {
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('ui-layer').style.display = 'block';
-            inGame = true;
-            animate();
-            log("Juego iniciado!", "#0f0");
-        }, 1500);
+            document.getElementById('loading-overlay').style.display = 'none';
+            screens.game.style.display = 'block';
+        }, 1000);
     }
 
-    function createEnvironment(seed) {
-        // Suelo Infinito
-        const gridGeo = new THREE.PlaneGeometry(20000, 20000);
-        const gridMat = new THREE.MeshStandardMaterial({ 
-            color: 0x0a0a0a, 
-            roughness: 0.8,
-            metalness: 0.2
-        });
-        const ground = new THREE.Mesh(gridGeo, gridMat);
-        ground.rotation.x = -Math.PI / 2;
-        ground.receiveShadow = true;
-        scene.add(ground);
+    function buildWorld(seed) {
+        // Suelo Grid
+        const grid = new THREE.GridHelper(5000, 200, 0xff00ff, 0x220022);
+        grid.position.y = -1;
+        scene.add(grid);
 
-        // Decoración retro (Grid lines)
-        const gridHelper = new THREE.GridHelper(20000, 400, 0x00ffff, 0x111111);
-        gridHelper.position.y = 0.1;
-        scene.add(gridHelper);
-
-        // Sol gigante Synthwave
-        const sunGeo = new THREE.SphereGeometry(800, 32, 32);
-        const sunMat = new THREE.MeshBasicMaterial({ color: 0xff4400, fog: false });
-        const bigSun = new THREE.Mesh(sunGeo, sunMat);
-        bigSun.position.set(0, 400, 4000);
-        scene.add(bigSun);
-    }
-
-    function createCarMesh(colorString) {
-        const group = new THREE.Group();
-
-        // Materiales
-        const bodyMat = new THREE.MeshStandardMaterial({ roughness: 0.2, metalness: 0.6 });
-        bodyMat.color.setStyle(colorString); // Socket envía "hsl(x,y,z)"
+        // Suelo Plano Reflectante
+        const plane = new THREE.Mesh(
+            new THREE.PlaneGeometry(5000, 5000),
+            new THREE.MeshBasicMaterial({ color: 0x110011 })
+        );
+        plane.rotation.x = -Math.PI/2;
+        plane.position.y = -1.1;
+        scene.add(plane);
         
-        const glassMat = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.1, metalness: 0.9 });
-        const neonMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+        // Sol Retro
+        const sun = new THREE.Mesh(
+            new THREE.CircleGeometry(500, 32),
+            new THREE.MeshBasicMaterial({ color: 0xffaa00 })
+        );
+        sun.position.set(0, 200, -2000);
+        scene.add(sun);
+    }
 
-        // Chasis (Caja simple estilo Cyberpunk)
-        const chassis = new THREE.Mesh(new THREE.BoxGeometry(2, 0.8, 4.5), bodyMat);
-        chassis.position.y = 0.6;
-        chassis.castShadow = true;
-        group.add(chassis);
+    function createCar(color) {
+        const g = new THREE.Group();
+        
+        // Cuerpo Tron
+        const geo = new THREE.BoxGeometry(2, 1, 4);
+        const mat = new THREE.MeshBasicMaterial({ color: 0x000000 }); // Negro base
+        const mesh = new THREE.Mesh(geo, mat);
+        
+        // Bordes Neon
+        const edges = new THREE.EdgesGeometry(geo);
+        const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: color }));
+        
+        g.add(mesh);
+        g.add(line);
+        
+        return g;
+    }
 
-        // Cabina
-        const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 2.5), glassMat);
-        cabin.position.set(0, 1.3, -0.2);
-        group.add(cabin);
+    function updateGameWorld(serverData) {
+        serverData.forEach(p => {
+            let player = state.players[p.i];
+            
+            // Nuevo jugador
+            if(!player) {
+                const mesh = createCar(p.c);
+                scene.add(mesh);
+                state.players[p.i] = { mesh: mesh };
+                player = state.players[p.i];
+                
+                if(p.i === myId) state.myCar = mesh;
+            }
 
-        // Neón trasero (Trail)
-        const trail = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.2, 0.1), neonMat);
-        trail.position.set(0, 0.6, -2.26);
-        group.add(trail);
+            // Interpolación visual
+            // Mapeamos Z (distancia) y X (lateral) a mundo 3D
+            const targetPos = new THREE.Vector3(p.x, 0.5, -p.z); // Invertimos Z para avanzar hacia fondo
+            
+            player.mesh.position.lerp(targetPos, 0.3);
+            player.mesh.rotation.y = -p.h; // Giro
 
-        return group;
+            if(p.i === myId) {
+                // Actualizar HUD
+                document.getElementById('speed-val').innerText = Math.floor(p.s * 100);
+                
+                // Cámara Follow
+                const camOff = new THREE.Vector3(0, 8, 15); // Detrás y arriba
+                camera.position.lerp(player.mesh.position.clone().add(camOff), 0.1);
+                camera.lookAt(player.mesh.position);
+            }
+        });
     }
 
     function animate() {
-        if (!inGame) return;
+        if(!inGame) return;
         requestAnimationFrame(animate);
-        
-        // Renderizar escena
         composer.render();
     }
 
-    // Ajuste de ventana
-    window.addEventListener('resize', () => {
-        if(camera && renderer) {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            composer.setSize(window.innerWidth, window.innerHeight);
-        }
-    });
+    // --- 4. CONTROLES ---
+    function setupControls() {
+        const send = () => {
+            if(socket && inGame) socket.emit('playerInput', state.input);
+        };
 
+        // Joystick Táctil
+        const zone = document.getElementById('joystick-area');
+        const knob = document.getElementById('joystick-dot');
+        let jId = null; 
+        const jRect = {x:0, w:0};
+
+        const moveJoy = (cx) => {
+            let dx = cx - (jRect.x + jRect.w/2);
+            dx = Math.max(-75, Math.min(75, dx)); // Clamp
+            knob.style.transform = `translate(${dx-25}px, -25px)`;
+            state.input.steer = dx / 75; // -1 a 1
+            send();
+        };
+
+        zone.addEventListener('touchstart', e => {
+            e.preventDefault();
+            jId = e.changedTouches[0].identifier;
+            const r = zone.getBoundingClientRect();
+            jRect.x = r.left; jRect.w = r.width;
+            moveJoy(e.changedTouches[0].clientX);
+        });
+        
+        zone.addEventListener('touchmove', e => {
+            e.preventDefault();
+            for(let i=0; i<e.changedTouches.length; i++) {
+                if(e.changedTouches[i].identifier === jId) moveJoy(e.changedTouches[i].clientX);
+            }
+        });
+        
+        zone.addEventListener('touchend', e => {
+            e.preventDefault();
+            jId = null;
+            state.input.steer = 0;
+            knob.style.transform = `translate(-50%, -50%)`;
+            send();
+        });
+
+        // Pedales
+        const bind = (id, key) => {
+            const el = document.getElementById(id);
+            const down = (e) => { e.preventDefault(); state.input[key] = true; send(); };
+            const up = (e) => { e.preventDefault(); state.input[key] = false; send(); };
+            el.addEventListener('mousedown', down); window.addEventListener('mouseup', up);
+            el.addEventListener('touchstart', down); el.addEventListener('touchend', up);
+        };
+        bind('pedal-gas', 'gas');
+        bind('pedal-brake', 'brake');
+        
+        // Teclado
+        window.addEventListener('keydown', e => {
+            if(e.key==='ArrowUp') state.input.gas=true;
+            if(e.key==='ArrowDown') state.input.brake=true;
+            if(e.key==='ArrowLeft') state.input.steer=-1;
+            if(e.key==='ArrowRight') state.input.steer=1;
+            send();
+        });
+        window.addEventListener('keyup', e => {
+            if(e.key==='ArrowUp') state.input.gas=false;
+            if(e.key==='ArrowDown') state.input.brake=false;
+            if(e.key==='ArrowLeft') state.input.steer=0;
+            if(e.key==='ArrowRight') state.input.steer=0;
+            send();
+        });
+    }
 </script>
 </body>
 </html>
