@@ -3,61 +3,64 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-    <title>Simulador Deportivo Ultimate v20</title>
+    <title>Ultimate Multiplayer v1.0</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<!-- PANTALLA DE INICIO -->
-<div id="start-screen">
-    <h1>ULTIMATE DRIVE</h1>
-    <p>Simulador Físico Avanzado v2.0</p>
-    <button id="btn-start">INICIAR MOTOR</button>
+<!-- LOBBY SCREEN -->
+<div id="lobby-screen">
+    <h1>ULTIMATE MP</h1>
+    
+    <!-- MAIN LOBBY -->
+    <div id="main-lobby" class="lobby-panel">
+        <button id="btn-show-create" class="lobby-btn">CREAR PARTIDA</button>
+        <div style="border-bottom:1px solid #444; margin: 10px 0;"></div>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span>Salas Disponibles:</span>
+            <button id="btn-refresh" style="background:none; border:none; color:#0cf; cursor:pointer;">↻</button>
+        </div>
+        <div id="room-list">
+            <div style="padding:20px; text-align:center; color:#666;">Buscando salas...</div>
+        </div>
+    </div>
+
+    <!-- CREATE ROOM MODAL -->
+    <div id="create-room-panel" class="lobby-panel" style="display:none;">
+        <h3>CONFIGURAR PARTIDA</h3>
+        
+        <div class="lobby-input-group">
+            <span>Velocidad Máx:</span>
+            <span id="host-speed-val">500 km/h</span>
+        </div>
+        <input type="range" id="host-speed" class="menu-range" min="120" max="999" value="500" style="width:100%">
+
+        <div class="lobby-input-group">
+            <span>Aceleración:</span>
+            <span id="host-accel-val">40 km/h/s</span>
+        </div>
+        <input type="range" id="host-accel" class="menu-range" min="15" max="99" value="40" style="width:100%">
+
+        <button id="btn-create-confirm" class="lobby-btn">INICIAR SERVIDOR</button>
+        <button id="btn-back" class="lobby-btn secondary">VOLVER</button>
+    </div>
 </div>
 
-<!-- PANTALLA DE CARGA -->
+<!-- LOADING -->
 <div id="loading">
     <span class="loader"></span>
-    <div>Calibrando Sistemas...</div>
+    <div id="loading-text">Conectando...</div>
 </div>
 
-<!-- INTERFAZ DE JUEGO -->
+<!-- GAME UI -->
 <div id="ui-layer">
-    <div id="fps-counter">FPS: 60</div>
+    <div id="player-count">Online: 1</div>
+    <div id="fps-counter" style="display:none;">FPS: 60</div>
 
-    <div id="menu-btn" class="pointer-events-auto">☰</div>
+    <div id="menu-btn" class="pointer-events-auto">⚙</div>
     
     <div id="menu-modal" class="pointer-events-auto">
-        <div class="menu-item">
-            <span>Mostrar FPS</span>
-            <label class="switch">
-                <input type="checkbox" id="chk-fps" checked>
-                <span class="slider-switch"></span>
-            </label>
-        </div>
-        <div class="menu-item">
-            <span>Slider Auto</span>
-            <label class="switch">
-                <input type="checkbox" id="chk-slider" checked>
-                <span class="slider-switch"></span>
-            </label>
-        </div>
-        
-        <div class="menu-group-title">AJUSTES MOTOR MANUAL</div>
-        
-        <div class="menu-item">
-            <span>Vel. Máx (km/h)</span>
-            <input type="range" id="manual-max-speed" class="menu-range" min="120" max="999" value="500">
-            <span id="disp-max-speed" class="val-display">500</span>
-        </div>
-        
-        <div class="menu-item">
-            <span>Acel. (km/h/s)</span>
-            <input type="range" id="manual-accel" class="menu-range" min="15" max="99" value="40">
-            <span id="disp-accel" class="val-display">+40</span>
-        </div>
-
-        <div class="menu-group-title">CONTROLES</div>
+        <div class="menu-group-title">OPCIONES</div>
         <div class="menu-item">
             <span>Invertir Dirección</span>
             <label class="switch">
@@ -66,60 +69,27 @@
             </label>
         </div>
         <div class="menu-item">
-            <span>Botón Freno</span>
-            <label class="switch">
-                <input type="checkbox" id="chk-show-brake" checked>
-                <span class="slider-switch"></span>
-            </label>
-        </div>
-        <div class="menu-item">
-            <span>Sensibilidad Giro</span>
+            <span>Sensibilidad</span>
             <input type="range" id="steer-sens" class="menu-range" min="10" max="150" value="60">
-            <span id="disp-sens" class="val-display">60%</span>
         </div>
         <div class="menu-item">
-            <span>Restricción Vel.</span>
-            <input type="range" id="steer-stiff" class="menu-range" min="0" max="100" value="50">
-            <span id="disp-stiff" class="val-display">50%</span>
+            <button id="btn-exit" class="lobby-btn secondary" style="width:100%; padding:8px; margin-top:10px;">SALIR DE LA SALA</button>
         </div>
-
-        <div class="menu-group-title">MODO</div>
-        <div class="menu-item">
-            <span id="mode-label" style="font-weight:bold; color:#ffaa00;">AUTOMÁTICO</span>
-            <label class="switch">
-                <input type="checkbox" id="chk-mode">
-                <span class="slider-switch"></span>
-            </label>
-        </div>
-    </div>
-
-    <div id="auto-controls" class="pointer-events-auto">
-        <label style="font-size:12px; font-weight:bold; letter-spacing:1px;">VELOCIDAD CRUCERO</label>
-        <input type="range" id="speedSlider" class="main-slider" min="0" max="1000" value="100">
     </div>
 
     <div id="manual-controls">
         <div id="hud-speed">
             <span id="speed-display">0</span><small> KM/H</small>
         </div>
-        
         <div id="joystick-zone" class="pointer-events-auto">
             <div id="joystick-knob"></div>
         </div>
-
         <div id="brake-btn" class="pedal pointer-events-auto">🛑</div>
         <div id="gas-btn" class="pedal pointer-events-auto">⚡</div>
     </div>
 </div>
 
-<script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-        }
-    }
-</script>
+<!-- FIREBASE & THREE -->
 <script type="module" src="main.js"></script>
 </body>
 </html>
