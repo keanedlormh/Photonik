@@ -5,13 +5,12 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // ==========================================
-// CONFIGURACIÓN MEJORADA
+// CONFIGURACIÓN VISUAL
 // ==========================================
 const CONFIG = {
-    ROAD_WIDTH_HALF: 9.0,   // Un poco más ancha para evitar claustrofobia
-    WALL_WIDTH: 1.2,        // Grosor del muro
-    WALL_HEIGHT: 1.5,       // Altura del muro
-    ROAD_THICKNESS: 0.5,    // Grosor visual de la capa de asfalto
+    ROAD_WIDTH_HALF: 8.0,   // Ancho desde el centro al borde
+    WALL_WIDTH: 1.0,        // Grosor del muro
+    WALL_HEIGHT: 1.4,       // Altura del muro
     CHUNK_LENGTH: 100,
     VISIBLE_CHUNKS: 16
 };
@@ -30,7 +29,7 @@ const state = {
 };
 
 // ==========================================
-// SISTEMA RNG DETERMINISTA
+// SISTEMA RNG (Determinista)
 // ==========================================
 function mulberry32(a) {
     return function() {
@@ -44,7 +43,7 @@ let rng = mulberry32(1);
 function setSeed(s) { rng = mulberry32(s); }
 
 // ==========================================
-// RED Y UI
+// UI Y RED
 // ==========================================
 let socket;
 const ui = {
@@ -117,7 +116,7 @@ function startGame(data) {
 }
 
 // ==========================================
-// MOTOR GRÁFICO MEJORADO
+// MOTOR GRÁFICO 3D
 // ==========================================
 let scene, camera, renderer, composer;
 let chunks = [];
@@ -125,29 +124,29 @@ let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = []; const smokeGroup = new THREE.Group();
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
-// MATERIALES (Asfalto oscuro y rugoso)
+// MATERIALES REVISADOS
 const matRoad = new THREE.MeshStandardMaterial({ 
-    color: 0x222222, // Gris muy oscuro casi negro
-    roughness: 0.9, 
+    color: 0x111111, // Gris Muy Oscuro (Asfalto Nuevo)
+    roughness: 0.8, 
     metalness: 0.1,
     flatShading: false
 }); 
-const matWall = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.5, metalness: 0.2 });
-const matLine = new THREE.MeshBasicMaterial({ color: 0xffff00 }); // Línea amarilla brillante
-const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.4, metalness: 0.1, flatShading: true });
-const matPillar = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.9 });
-const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xcccccc, emissiveIntensity: 0.2, flatShading: true });
+const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1 }); // Hormigón claro
+const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffcc00 }); 
+const matLineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
+const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.2, metalness: 0.5, flatShading: true });
+const matPillar = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
 const matLeaves = new THREE.MeshStandardMaterial({color: 0x2e7d32});
 const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
 
 function initThreeJS() {
     scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x87CEEB, 0.002);
+    scene.fog = new THREE.FogExp2(0x87CEEB, 0.0025);
 
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
     camera.position.set(0, 5, -10);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true }); // Logarithmic para evitar flickering
+    renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true }); 
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -159,7 +158,7 @@ function initThreeJS() {
 
     const renderPass = new RenderPass(scene, camera);
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-    bloomPass.threshold = 0.85; bloomPass.strength = 0.3; bloomPass.radius = 0.2;
+    bloomPass.threshold = 0.8; bloomPass.strength = 0.25; bloomPass.radius = 0.2;
     
     composer = new EffectComposer(renderer);
     composer.addPass(renderPass);
@@ -174,7 +173,7 @@ function initThreeJS() {
 }
 
 function setupEnvironment() {
-    ambientLight = new THREE.AmbientLight(0x404040, 1.5); scene.add(ambientLight);
+    ambientLight = new THREE.AmbientLight(0x404040, 1.8); scene.add(ambientLight);
     sunLight = new THREE.DirectionalLight(0xffdf80, 2.5);
     sunLight.castShadow = true; 
     sunLight.shadow.mapSize.set(2048, 2048);
@@ -196,7 +195,7 @@ function setupEnvironment() {
 }
 
 // ==========================================
-// GENERACIÓN PROCEDURAL ROBUSTA
+// GENERACIÓN PROCEDURAL (Terreno y Carretera)
 // ==========================================
 const noisePerm = new Uint8Array(512); const p = new Uint8Array(256);
 for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
@@ -221,7 +220,7 @@ class Chunk {
         const endZ = Math.sin(endAngle) * CONFIG.CHUNK_LENGTH + p0.z;
         
         let tH = getTerrainHeight(endX, endZ);
-        let targetY = (tH < 1) ? Math.max(p0.y, 3) : tH + 2.0;
+        let targetY = (tH < 1) ? Math.max(p0.y, 5) : tH + 3.0; // Mínimo 3 metros sobre suelo
         targetY = THREE.MathUtils.clamp(targetY, p0.y - 6.0, p0.y + 6.0);
 
         const p3 = new THREE.Vector3(endX, targetY, endZ);
@@ -233,147 +232,90 @@ class Chunk {
         this.endDist = globalDist + this.length;
         this.endPoint = p3; this.endAngle = endAngle;
 
-        this.buildRoadMesh();
+        this.buildStructure();
         this.buildTerrain();
         this.buildProps();
     }
 
-    buildRoadMesh() {
-        const div = 30; 
+    buildStructure() {
+        const div = 25; 
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
         
-        // Arrays para geometría
-        const roadV = [], roadN = []; // Asfalto
-        const wallV = [], wallN = []; // Muros Sólidos
-        const lineV = [], lineN = []; // Líneas discontinuas
+        const roadV = [], roadN = [];
 
+        // 1. CARRETERA (ASFALTO)
         for(let i=0; i<=div; i++) {
             const p = pts[i]; 
-            const n = frames.binormals[i]; // Vector Lateral
-            const up = frames.normals[i];  // Vector Vertical (Arriba)
+            const n = frames.binormals[i]; 
+            const up = frames.normals[i];
 
-            // 1. CARRETERA (Superficie)
-            // Calculamos bordes izquierdo y derecho
-            const rLeft = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
-            const rRight = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
+            const l = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
+            const r = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
             
-            // Asfalto (Quad Strip)
-            roadV.push(
-                rLeft.x, rLeft.y, rLeft.z,
-                rRight.x, rRight.y, rRight.z
-            );
+            roadV.push(l.x, l.y, l.z, r.x, r.y, r.z);
             roadN.push(up.x, up.y, up.z, up.x, up.y, up.z);
-
-            // 2. MUROS SÓLIDOS (Grosor real)
-            const wHeight = CONFIG.WALL_HEIGHT;
-            const wThick = CONFIG.WALL_WIDTH;
-
-            // Muro Izquierdo
-            const wlInner = rLeft; // Borde interior (tocando carretera)
-            const wlOuter = rLeft.clone().add(n.clone().multiplyScalar(wThick)); // Borde exterior
-            
-            // Generamos geometría "Strip" para las caras visibles del muro (Top, Inner, Outer)
-            // Para simplificar en un solo draw call usamos una lógica de extrusión simple o múltiples strips
-            // Aquí usaremos strips verticales para simular solidez.
-            
-            // Top Muro Izq
-            wallV.push(
-                wlOuter.x, wlOuter.y + wHeight, wlOuter.z, // Outer Top
-                wlInner.x, wlInner.y + wHeight, wlInner.z  // Inner Top
-            );
-            wallN.push(0,1,0, 0,1,0);
-
-            // 3. LÍNEAS DISCONTINUAS
-            // Solo dibujamos si estamos en un segmento "pintado"
-            // Patrón: 3 segmentos sí, 2 no
-            if (i % 5 < 3 && i < div) {
-                // Pequeño quad flotando sobre el asfalto (0.05 arriba)
-                const lWidth = 0.25;
-                const lLeft = p.clone().add(n.clone().multiplyScalar(lWidth));
-                const lRight = p.clone().add(n.clone().multiplyScalar(-lWidth));
-                
-                // Necesitamos el siguiente punto para hacer el quad (i+1)
-                // Como este loop es por vértices para strips, la lógica de líneas es mejor hacerla separada o "hackearla"
-                // Para simplificar: solo añadimos vértices si i < div, creando quads independientes luego
-            }
         }
-
-        // Construir Asfalto
-        const roadGeo = createStripGeometry(roadV, roadN);
-        const roadMesh = new THREE.Mesh(roadGeo, matRoad); 
+        
+        const roadMesh = new THREE.Mesh(createStripGeometry(roadV, roadN), matRoad);
         roadMesh.receiveShadow = true; 
-        // Desplazamiento visual vertical para que no se solape con pilares
-        roadMesh.position.y = CONFIG.ROAD_THICKNESS; 
         this.group.add(roadMesh);
 
-        // Construir Muros (Usamos Top Strip por ahora, para total solidez se necesitarían 3 strips: Inner, Top, Outer)
-        // Simplificación visual efectiva: Muro grueso solo dibujando el tope y usando extrusión o caras laterales
-        // Vamos a hacer algo mejor: Muros como objetos extruidos a lo largo de la curva es costoso.
-        // Haremos el "Top" del muro y las caras laterales.
-        
-        // Muro Izquierdo Completo
-        this.createWallSolid(pts, frames, 1); // 1 = Izquierda
-        this.createWallSolid(pts, frames, -1); // -1 = Derecha
+        // 2. MUROS SÓLIDOS (Extrusión 3D)
+        this.createWallExtrusion(pts, frames, 1);  // Muro Izq
+        this.createWallExtrusion(pts, frames, -1); // Muro Der
 
-        // Líneas Discontinuas (Generación dedicada)
-        this.createDashedLines(pts, frames);
+        // 3. LÍNEAS DE CARRIL (Pintura sobre asfalto)
+        this.createRoadLines(pts, frames);
     }
 
-    createWallSolid(pts, frames, side) {
-        // side: 1 (Izq), -1 (Der)
+    createWallExtrusion(pts, frames, side) {
+        // side: 1 = Izquierda, -1 = Derecha
         const verts = [];
         const norms = [];
-        
-        // Definir offsets
-        const distInner = CONFIG.ROAD_WIDTH_HALF;
-        const distOuter = CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH;
+        const offsetInner = CONFIG.ROAD_WIDTH_HALF;
+        const offsetOuter = CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH;
         const h = CONFIG.WALL_HEIGHT;
-        const yBase = CONFIG.ROAD_THICKNESS; // Base del muro sobre el asfalto
+        const thickness = 0.8; // Profundidad hacia abajo para cubrir el borde de la carretera
 
-        // Generaremos 3 caras: Interior (mirando a pista), Superior, Exterior
-        // Para optimizar, haremos una sola malla con normales calculadas
-        
         for(let i=0; i<pts.length-1; i++) {
             const p1 = pts[i]; const n1 = frames.binormals[i].clone().multiplyScalar(side);
             const p2 = pts[i+1]; const n2 = frames.binormals[i+1].clone().multiplyScalar(side);
 
-            // Puntos base
-            const p1In = p1.clone().add(n1.clone().multiplyScalar(distInner));
-            const p1Out = p1.clone().add(n1.clone().multiplyScalar(distOuter));
-            const p2In = p2.clone().add(n2.clone().multiplyScalar(distInner));
-            const p2Out = p2.clone().add(n2.clone().multiplyScalar(distOuter));
+            // Coordenadas Base (Nivel de carretera)
+            const p1In = p1.clone().add(n1.clone().multiplyScalar(offsetInner));
+            const p1Out = p1.clone().add(n1.clone().multiplyScalar(offsetOuter));
+            const p2In = p2.clone().add(n2.clone().multiplyScalar(offsetInner));
+            const p2Out = p2.clone().add(n2.clone().multiplyScalar(offsetOuter));
 
-            // Ajustar altura base
-            p1In.y += yBase; p1Out.y += yBase; p2In.y += yBase; p2Out.y += yBase;
-
-            // CARA SUPERIOR (Top)
-            pushQuad(verts, norms, 
-                new THREE.Vector3(p1Out.x, p1Out.y+h, p1Out.z),
-                new THREE.Vector3(p1In.x, p1In.y+h, p1In.z),
-                new THREE.Vector3(p2Out.x, p2Out.y+h, p2Out.z),
-                new THREE.Vector3(p2In.x, p2In.y+h, p2In.z),
-                new THREE.Vector3(0,1,0)
+            // -- TOP FACE (Tapa Superior) --
+            // Desde Y+h a Y+h
+            pushQuad(verts, norms,
+                new THREE.Vector3(p1Out.x, p1Out.y+h, p1Out.z), // Top Outer 1
+                new THREE.Vector3(p1In.x, p1In.y+h, p1In.z),    // Top Inner 1
+                new THREE.Vector3(p2Out.x, p2Out.y+h, p2Out.z), // Top Outer 2
+                new THREE.Vector3(p2In.x, p2In.y+h, p2In.z),    // Top Inner 2
+                new THREE.Vector3(0, 1, 0)
             );
 
-            // CARA INTERIOR (La que ve el coche)
-            // Normal apunta hacia el centro de la pista (aprox -n1)
-            const normIn = n1.clone().multiplyScalar(-1);
+            // -- INNER FACE (Cara Interna visible desde pista) --
+            // Desde Y+h hasta Y-thickness
+            const normIn = n1.clone().negate(); // Normal apunta al centro
             pushQuad(verts, norms,
-                new THREE.Vector3(p1In.x, p1In.y+h, p1In.z),
-                new THREE.Vector3(p1In.x, p1In.y-2, p1In.z), // Extendemos hacia abajo para cubrir pilares
-                new THREE.Vector3(p2In.x, p2In.y+h, p2In.z),
-                new THREE.Vector3(p2In.x, p2In.y-2, p2In.z),
+                new THREE.Vector3(p1In.x, p1In.y+h, p1In.z),    // Top 1
+                new THREE.Vector3(p1In.x, p1In.y-thickness, p1In.z), // Bottom 1
+                new THREE.Vector3(p2In.x, p2In.y+h, p2In.z),    // Top 2
+                new THREE.Vector3(p2In.x, p2In.y-thickness, p2In.z), // Bottom 2
                 normIn
             );
 
-            // CARA EXTERIOR
+            // -- OUTER FACE (Cara Externa) --
             pushQuad(verts, norms,
-                new THREE.Vector3(p1Out.x, p1Out.y-2, p1Out.z),
+                new THREE.Vector3(p1Out.x, p1Out.y-thickness, p1Out.z),
                 new THREE.Vector3(p1Out.x, p1Out.y+h, p1Out.z),
-                new THREE.Vector3(p2Out.x, p2Out.y-2, p2Out.z),
+                new THREE.Vector3(p2Out.x, p2Out.y-thickness, p2Out.z),
                 new THREE.Vector3(p2Out.x, p2Out.y+h, p2Out.z),
-                n1 // Normal hacia afuera
+                n1
             );
         }
 
@@ -385,39 +327,73 @@ class Chunk {
         this.group.add(mesh);
     }
 
-    createDashedLines(pts, frames) {
-        const verts = [];
-        const width = 0.3; // Ancho de línea
-        const yOff = CONFIG.ROAD_THICKNESS + 0.05; // Apenas por encima del asfalto
-
-        for(let i=0; i<pts.length-1; i+=2) { // Saltamos de 2 en 2 para hacer huecos
-            // i=0 dibuja, i=1 salta (efecto dash simple)
-            // Para dash más largo: dibujar i, i+1, i+2 y saltar i+3
-            
-            if(i % 6 < 4) { // Patrón: Dibuja 4, salta 2
-                const p1 = pts[i]; const n1 = frames.binormals[i];
-                const p2 = pts[i+1]; const n2 = frames.binormals[i+1];
-
-                const p1L = p1.clone().add(n1.clone().multiplyScalar(width));
-                const p1R = p1.clone().add(n1.clone().multiplyScalar(-width));
-                const p2L = p2.clone().add(n2.clone().multiplyScalar(width));
-                const p2R = p2.clone().add(n2.clone().multiplyScalar(-width));
-
-                // Elevamos
-                p1L.y += yOff; p1R.y += yOff; p2L.y += yOff; p2R.y += yOff;
-
-                pushQuad(verts, [], p1L, p1R, p2L, p2R); // No necesitamos normales para BasicMaterial
-            }
-        }
+    createRoadLines(pts, frames) {
+        // Línea Central (Amarilla Discontinua)
+        const cV = [];
+        const lw = 0.2; // Ancho línea central
+        const yOff = 0.05; // Altura sobre asfalto
         
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-        const mesh = new THREE.Mesh(geo, matLine);
-        this.group.add(mesh);
+        // Líneas Laterales (Blancas Continuas)
+        const sV = [];
+        const sw = 0.3; // Ancho línea lateral
+        const dist = CONFIG.ROAD_WIDTH_HALF - 0.8; // Distancia del centro
+
+        for(let i=0; i<pts.length-1; i++) {
+            const p1 = pts[i]; const n1 = frames.binormals[i];
+            const p2 = pts[i+1]; const n2 = frames.binormals[i+1];
+
+            // Central: Solo dibujar si es par (efecto dash simple)
+            if(i % 2 === 0) {
+                const l1 = p1.clone().add(n1.clone().multiplyScalar(lw));
+                const r1 = p1.clone().add(n1.clone().multiplyScalar(-lw));
+                const l2 = p2.clone().add(n2.clone().multiplyScalar(lw));
+                const r2 = p2.clone().add(n2.clone().multiplyScalar(-lw));
+                
+                pushQuad(cV, [], 
+                    new THREE.Vector3(l1.x, l1.y+yOff, l1.z),
+                    new THREE.Vector3(r1.x, r1.y+yOff, r1.z),
+                    new THREE.Vector3(l2.x, l2.y+yOff, l2.z),
+                    new THREE.Vector3(r2.x, r2.y+yOff, r2.z)
+                );
+            }
+
+            // Lateral Izquierda
+            let l1 = p1.clone().add(n1.clone().multiplyScalar(dist));
+            let r1 = p1.clone().add(n1.clone().multiplyScalar(dist + sw));
+            let l2 = p2.clone().add(n2.clone().multiplyScalar(dist));
+            let r2 = p2.clone().add(n2.clone().multiplyScalar(dist + sw));
+            pushQuad(sV, [], 
+                new THREE.Vector3(l1.x, l1.y+yOff, l1.z),
+                new THREE.Vector3(r1.x, r1.y+yOff, r1.z),
+                new THREE.Vector3(l2.x, l2.y+yOff, l2.z),
+                new THREE.Vector3(r2.x, r2.y+yOff, r2.z)
+            );
+
+            // Lateral Derecha
+            l1 = p1.clone().add(n1.clone().multiplyScalar(-dist));
+            r1 = p1.clone().add(n1.clone().multiplyScalar(-(dist + sw)));
+            l2 = p2.clone().add(n2.clone().multiplyScalar(-dist));
+            r2 = p2.clone().add(n2.clone().multiplyScalar(-(dist + sw)));
+            pushQuad(sV, [], 
+                new THREE.Vector3(l1.x, l1.y+yOff, l1.z),
+                new THREE.Vector3(r1.x, r1.y+yOff, r1.z),
+                new THREE.Vector3(l2.x, l2.y+yOff, l2.z),
+                new THREE.Vector3(r2.x, r2.y+yOff, r2.z)
+            );
+        }
+
+        if(cV.length>0) {
+            const cg = new THREE.BufferGeometry(); cg.setAttribute('position', new THREE.Float32BufferAttribute(cV,3));
+            this.group.add(new THREE.Mesh(cg, matLineYellow));
+        }
+        if(sV.length>0) {
+            const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(sV,3));
+            this.group.add(new THREE.Mesh(sg, matLineWhite));
+        }
     }
 
     buildTerrain() {
-        const div = 20; const w = 400; const divW = 10;
+        const div = 25; const w = 400; const divW = 10;
         const vs = [], cs = []; const col = new THREE.Color();
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
@@ -431,13 +407,12 @@ class Chunk {
 
                 if(py < -1) col.setHex(0xe6c288); else if(py < 10) col.setHex(0x2e7d32); else col.setHex(0x5d4037);
 
-                // Hueco enorme bajo la carretera para que los pilares se vean bien
-                if(Math.abs(xOff) < CONFIG.ROAD_WIDTH_HALF + 5) py = Math.min(py, P.y - 15);
+                // Hundir terreno bajo carretera para evitar clipping con asfalto
+                if(Math.abs(xOff) < CONFIG.ROAD_WIDTH_HALF + 5) py = Math.min(py, P.y - 8);
                 
                 vs.push(px, py, pz); cs.push(col.r, col.g, col.b);
             }
         }
-        
         const g = createGridGeometry(vs, cs, div, divW);
         const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({vertexColors: true, flatShading: true}));
         m.receiveShadow = true; this.group.add(m);
@@ -449,14 +424,18 @@ class Chunk {
     }
 
     buildProps() {
-        // Pilares Centrales Masivos
-        for(let i=0; i<=1; i+=0.1) {
+        // Pilares corregidos (Sin sobresalir)
+        for(let i=0; i<=1; i+=0.15) {
             const p = this.curve.getPointAt(i);
             const th = getTerrainHeight(p.x, p.z);
-            if(p.y > th + 5) {
-                const h = (p.y + CONFIG.ROAD_THICKNESS) - th; // Desde abajo del asfalto hasta suelo
-                const pil = new THREE.Mesh(new THREE.BoxGeometry(10, h, 4), matPillar);
-                pil.position.set(p.x, th + h/2, p.z);
+            // Solo generar si hay altura suficiente
+            if(p.y > th + 4) {
+                // El tope del pilar es P.y (base asfalto)
+                // La base del pilar es th (terreno)
+                const height = p.y - th; 
+                const pil = new THREE.Mesh(new THREE.BoxGeometry(6, height, 4), matPillar);
+                // Posición Y = Terreno + Mitad altura
+                pil.position.set(p.x, th + height/2, p.z);
                 pil.castShadow = true;
                 this.group.add(pil);
             }
@@ -481,12 +460,11 @@ class Chunk {
 }
 
 // Helpers Geometría
-function pushQuad(verts, norms, tl, tr, bl, br, norm) {
+function pushQuad(verts, norms, tl, bl, tr, br, norm) {
     verts.push(tl.x, tl.y, tl.z, bl.x, bl.y, bl.z, tr.x, tr.y, tr.z);
     verts.push(tr.x, tr.y, tr.z, bl.x, bl.y, bl.z, br.x, br.y, br.z);
     if(norm) {
-        norms.push(norm.x, norm.y, norm.z, norm.x, norm.y, norm.z, norm.x, norm.y, norm.z);
-        norms.push(norm.x, norm.y, norm.z, norm.x, norm.y, norm.z, norm.x, norm.y, norm.z);
+        for(let k=0; k<6; k++) norms.push(norm.x, norm.y, norm.z);
     }
 }
 
@@ -515,7 +493,7 @@ function createGridGeometry(verts, colors, rows, cols) {
 }
 
 // ==========================================
-// GESTIÓN DEL COCHE
+// VEHÍCULO
 // ==========================================
 function createOutline(geo, scale) {
     const m = new THREE.Mesh(geo, matOutline); m.scale.multiplyScalar(scale); return m;
@@ -586,9 +564,8 @@ function updateWorldState(data) {
             const finalPos = trackInfo.pos.clone();
             finalPos.add(trackInfo.right.multiplyScalar(pData.l)); 
             
-            // CORRECCIÓN FÍSICA: COCHE SOBRE ASFALTO
-            // Asfalto está en Y + ROAD_THICKNESS. El coche tiene su origen en 0, y las ruedas radius 0.4
-            finalPos.y += CONFIG.ROAD_THICKNESS + 0.05; 
+            // Altura Ajustada: El coche flota sobre el asfalto (y=0)
+            finalPos.y += 0.05; 
 
             playerObj.mesh.position.lerp(finalPos, 0.3);
             const lookTarget = finalPos.clone().add(trackInfo.tan);
