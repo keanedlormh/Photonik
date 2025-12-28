@@ -34,41 +34,43 @@ const BASE_SPEED = 0.45;
 const ROAD_WIDTH_HALF = 8.5;
 const CAR_WIDTH_HALF = 1.0;
 const WALL_LIMIT = ROAD_WIDTH_HALF - CAR_WIDTH_HALF - 0.2;
-const CHUNK_LENGTH = 100;
 
 // Estado del Servidor
 const rooms = {}; // { roomId: { players: {}, config: {}, trackSeed: 123 } }
 
-// Generación de Pista (Simplificada para física)
-// En un entorno real, usaríamos una librería de ruido compartida.
-// Aquí usamos una pseudo-aleatoriedad basada en seed para sincronizar curvas.
 function getTrackCurvePoint(dist, seed) {
-    // Simulación simple de la curva basada en seno/coseno y seed
-    // para que el servidor sepa dónde está la carretera.
-    // NOTA: Para producción, portar el SimplexNoise completo.
-    // Aquí usamos una aproximación matemática determinista.
     const curvature = Math.sin(dist * 0.01 + seed) * 0.5 + Math.sin(dist * 0.003 + seed) * 0.2;
-    // Tangente aproximada
     const angle = curvature; 
     const x = Math.sin(angle);
-    const z = Math.cos(angle); // Avanzamos mayormente en Z
+    const z = Math.cos(angle); 
     
-    // Devolvemos vectores normalizados de la pista en ese punto
     const tangent = new Vector3(x, 0, z).normalize();
     const up = new Vector3(0,1,0);
     const right = new Vector3().crossVectors(tangent, up).normalize();
     
-    // Posición aproximada (no exacta sin integrar todo el spline, pero sirve para validación local)
-    // En este modelo "semi-autoritativo", calculamos la física localmente en base a los vectores.
     return { tangent, right };
 }
 
 io.on('connection', (socket) => {
     console.log('Jugador conectado:', socket.id);
 
+    // Listar Salas
+    socket.on('getRooms', () => {
+        const roomList = [];
+        for (const id in rooms) {
+            const r = rooms[id];
+            roomList.push({
+                id: r.id,
+                players: Object.keys(r.players).length,
+                config: r.config
+            });
+        }
+        socket.emit('roomList', roomList);
+    });
+
     // Crear Sala
     socket.on('createRoom', (data) => {
-        const roomId = Math.random().toString(36).substring(7);
+        const roomId = Math.random().toString(36).substring(7).toUpperCase(); // Códigos mayúsculas más cortos
         rooms[roomId] = {
             id: roomId,
             host: socket.id,
@@ -85,6 +87,7 @@ io.on('connection', (socket) => {
 
     // Unirse a Sala
     socket.on('joinRoom', (roomId) => {
+        roomId = roomId.toUpperCase(); // Normalizar input
         if (rooms[roomId]) {
             socket.emit('roomJoined', { 
                 roomId, 
@@ -97,11 +100,10 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Input del Jugador
     socket.on('playerInput', (input) => {
         const player = getPlayer(socket.id);
         if (player) {
-            player.input = input; // { steer, gas, brake }
+            player.input = input; 
         }
     });
 
@@ -115,16 +117,12 @@ function joinPlayerToRoom(socket, roomId) {
     rooms[roomId].players[socket.id] = {
         id: socket.id,
         color: color,
-        // Física Estado
         manualSpeed: 0.0,
         worldHeading: 0.0,
         lateralOffset: 0.0,
         trackDist: 0.0,
-        // Inputs
         input: { steer: 0, gas: false, brake: false }
     };
-    // Notificar a todos en la sala
-    io.to(roomId).emit('updatePlayerList', Object.values(rooms[roomId].players));
     socket.join(roomId);
 }
 
@@ -141,16 +139,14 @@ function removePlayer(socketId) {
             delete rooms[rid].players[socketId];
             io.to(rid).emit('playerLeft', socketId);
             if (Object.keys(rooms[rid].players).length === 0) {
-                delete rooms[rid]; // Eliminar sala vacía
+                delete rooms[rid]; 
             }
             break;
         }
     }
 }
 
-// ==========================================
 // GAME LOOP (60 FPS)
-// ==========================================
 setInterval(() => {
     for (const rid in rooms) {
         const room = rooms[rid];
@@ -159,13 +155,9 @@ setInterval(() => {
         for (const pid in room.players) {
             const p = room.players[pid];
             
-            // --- FÍSICA V19 (Server Side) ---
-            
-            // 1. Config
             const internalMaxSpeed = BASE_SPEED * (room.config.maxKmhLimit / 100.0);
             const accelDelta = (BASE_SPEED * (room.config.accelKmhPerSec / 100.0)) / 60.0;
 
-            // 2. Velocidad
             if (p.input.gas) {
                 if (p.manualSpeed < internalMaxSpeed) p.manualSpeed += accelDelta;
             } else if (p.input.brake) {
@@ -175,11 +167,7 @@ setInterval(() => {
             }
             if (p.manualSpeed < 0) p.manualSpeed = 0;
 
-            // 3. Dirección
-            // Simplificación: sensibilidad fija en servidor para rendimiento, 
-            // o replicamos la curva completa V11. Usaremos una media.
             let turnSens = 0.04; 
-            // Si queremos ser precisos:
             const kmh = p.manualSpeed * 100;
             if(kmh < 60) turnSens = 0.06;
             else if(kmh > 320) turnSens = 0.012;
@@ -187,9 +175,6 @@ setInterval(() => {
 
             p.worldHeading += p.input.steer * turnSens;
 
-            // 4. Movimiento
-            // Usamos la misma lógica de proyección de vectores
-            // Como no tenemos la malla 3D completa, usamos la función matemática getTrackCurvePoint
             const trackData = getTrackCurvePoint(p.trackDist, room.trackSeed);
             
             if (trackData) {
@@ -203,16 +188,11 @@ setInterval(() => {
                 p.trackDist += fwd;
                 p.lateralOffset += lat;
 
-                // Rebote
                 if (Math.abs(p.lateralOffset) > WALL_LIMIT) {
                     const roadAngle = Math.atan2(trackData.tangent.x, trackData.tangent.z);
-                    let relAngle = p.worldHeading - roadAngle;
-                    // Normalizar ángulos es complejo sin librería math completa, 
-                    // asumimos rebote simple invirtiendo heading relativo a la tangente
-                    // Simplificación rebote servidor:
+                    // Rebote simplificado server-side
                     p.lateralOffset = Math.sign(p.lateralOffset) * (WALL_LIMIT - 0.1);
                     p.manualSpeed *= 0.8;
-                    // Ajuste simple de heading para rebotar
                     p.worldHeading = roadAngle - (p.worldHeading - roadAngle) * 0.3;
                 }
             }
@@ -226,8 +206,6 @@ setInterval(() => {
                 color: p.color
             });
         }
-
-        // Enviar estado a todos los clientes de la sala
         io.to(rid).emit('gameState', stateUpdate);
     }
 }, 1000 / 60);
