@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <title>Simulador Deportivo Ultimate v20</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- PANTALLA DE INICIO -->
+<div id="start-screen">
+    <h1>ULTIMATE DRIVE</h1>
+    <p>Simulador Físico Avanzado v2.0</p>
+    <button id="btn-start">INICIAR MOTOR</button>
+</div>
+
+<!-- PANTALLA DE CARGA -->
+<div id="loading">
+    <span class="loader"></span>
+    <div>Calibrando Sistemas...</div>
+</div>
+
+<!-- INTERFAZ DE JUEGO -->
+<div id="ui-layer">
+    <div id="fps-counter">FPS: 60</div>
+
+    <div id="menu-btn" class="pointer-events-auto">☰</div>
+    
+    <div id="menu-modal" class="pointer-events-auto">
+        <div class="menu-item">
+            <span>Mostrar FPS</span>
+            <label class="switch">
+                <input type="checkbox" id="chk-fps" checked>
+                <span class="slider-switch"></span>
+            </label>
+        </div>
+        <div class="menu-item">
+            <span>Slider Auto</span>
+            <label class="switch">
+                <input type="checkbox" id="chk-slider" checked>
+                <span class="slider-switch"></span>
+            </label>
+        </div>
+        
+        <div class="menu-group-title">AJUSTES MOTOR MANUAL</div>
+        
+        <div class="menu-item">
+            <span>Vel. Máx (km/h)</span>
+            <input type="range" id="manual-max-speed" class="menu-range" min="120" max="999" value="500">
+            <span id="disp-max-speed" class="val-display">500</span>
+        </div>
+        
+        <div class="menu-item">
+            <span>Acel. (km/h/s)</span>
+            <input type="range" id="manual-accel" class="menu-range" min="15" max="99" value="40">
+            <span id="disp-accel" class="val-display">+40</span>
+        </div>
+
+        <div class="menu-group-title">CONTROLES</div>
+        <div class="menu-item">
+            <span>Invertir Dirección</span>
+            <label class="switch">
+                <input type="checkbox" id="chk-invert-steering">
+                <span class="slider-switch"></span>
+            </label>
+        </div>
+        <div class="menu-item">
+            <span>Botón Freno</span>
+            <label class="switch">
+                <input type="checkbox" id="chk-show-brake" checked>
+                <span class="slider-switch"></span>
+            </label>
+        </div>
+        <div class="menu-item">
+            <span>Sensibilidad Giro</span>
+            <input type="range" id="steer-sens" class="menu-range" min="10" max="150" value="60">
+            <span id="disp-sens" class="val-display">60%</span>
+        </div>
+        <div class="menu-item">
+            <span>Restricción Vel.</span>
+            <input type="range" id="steer-stiff" class="menu-range" min="0" max="100" value="50">
+            <span id="disp-stiff" class="val-display">50%</span>
+        </div>
+
+        <div class="menu-group-title">MODO</div>
+        <div class="menu-item">
+            <span id="mode-label" style="font-weight:bold; color:#ffaa00;">AUTOMÁTICO</span>
+            <label class="switch">
+                <input type="checkbox" id="chk-mode">
+                <span class="slider-switch"></span>
+            </label>
+        </div>
+    </div>
+
+    <div id="auto-controls" class="pointer-events-auto">
+        <label style="font-size:12px; font-weight:bold; letter-spacing:1px;">VELOCIDAD CRUCERO</label>
+        <input type="range" id="speedSlider" class="main-slider" min="0" max="1000" value="100">
+    </div>
+
+    <div id="manual-controls">
+        <div id="hud-speed">
+            <span id="speed-display">0</span><small> KM/H</small>
+        </div>
+        
+        <div id="joystick-zone" class="pointer-events-auto">
+            <div id="joystick-knob"></div>
+        </div>
+
+        <div id="brake-btn" class="pedal pointer-events-auto">🛑</div>
+        <div id="gas-btn" class="pedal pointer-events-auto">⚡</div>
+    </div>
+</div>
+
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+</script>
+<script type="module" src="main.js"></script>
+</body>
+</html>
