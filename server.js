@@ -5,86 +5,60 @@ const server = http.createServer(app);
 const { Server } = require("socket.io");
 const path = require('path');
 
-// Configuración ROBUSTA de Socket.IO
-// Permite conexiones desde cualquier origen y varios métodos de transporte
 const io = new Server(server, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"],
-        credentials: true
-    },
-    transports: ['websocket', 'polling'] // Forzar compatibilidad máxima
+    cors: { origin: "*", methods: ["GET", "POST"] },
+    transports: ['websocket', 'polling']
 });
 
-// Servir archivos estáticos
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Ruta por defecto para asegurar que servimos el index
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// --- CONSTANTES DE JUEGO ---
 const CONFIG = {
     FPS: 60,
-    BASE_SPEED: 0.5,
-    WALL_LIMIT: 7.2
+    BASE_SPEED: 0.8, // Velocidad base ajustada
+    WALL_LIMIT: 6.8  // Un poco menos que el cliente para evitar glitch visual
 };
 
 const rooms = {}; 
 
 io.on('connection', (socket) => {
-    console.log(`[NET] Cliente conectado: ${socket.id}`);
+    console.log(`[NET] Cliente: ${socket.id}`);
 
-    // --- GESTIÓN DE SALAS ---
     socket.on('getRooms', () => {
         const list = [];
         for (const rid in rooms) {
             const r = rooms[rid];
-            // Limpieza automática: si no hay jugadores, la sala no se lista (y se borra)
-            if (Object.keys(r.players).length === 0) {
-                delete rooms[rid];
+            if (Object.keys(r.players).length > 0) {
+                list.push({ id: r.id, players: Object.keys(r.players).length });
             } else {
-                list.push({ 
-                    id: r.id, 
-                    players: Object.keys(r.players).length, 
-                    config: r.config 
-                });
+                delete rooms[rid];
             }
         }
         socket.emit('roomList', list);
     });
 
     socket.on('createRoom', (data) => {
-        try {
-            const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
-            
-            rooms[roomId] = {
-                id: roomId,
-                players: {},
-                config: { 
-                    maxKmh: data.maxKmh || 500, 
-                    accel: data.accel || 40 
-                },
-                seed: Math.floor(Math.random() * 9999)
-            };
-            
-            console.log(`[SALA] Creada sala ${roomId}`);
-            socket.emit('roomCreated', { roomId, seed: rooms[roomId].seed });
-            joinPlayer(socket, roomId);
-        } catch (e) {
-            console.error("Error creando sala:", e);
-        }
+        const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+        rooms[roomId] = {
+            id: roomId,
+            players: {},
+            // Semilla vital para que todos generen la misma pista
+            seed: Math.floor(Math.random() * 100000) + 1 
+        };
+        console.log(`[SALA] Creada ${roomId} Seed: ${rooms[roomId].seed}`);
+        socket.emit('roomCreated', { roomId, seed: rooms[roomId].seed });
+        joinPlayer(socket, roomId);
     });
 
     socket.on('joinRoom', (roomId) => {
-        if (!roomId) return;
+        if(!roomId) return;
         roomId = roomId.toUpperCase();
-        
         if (rooms[roomId]) {
             socket.emit('roomJoined', { 
                 roomId, 
-                config: rooms[roomId].config, 
                 seed: rooms[roomId].seed 
             });
             joinPlayer(socket, roomId);
@@ -93,7 +67,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- GAMEPLAY ---
     socket.on('playerInput', (input) => {
         const rid = socket.data.room;
         if (rid && rooms[rid] && rooms[rid].players[socket.id]) {
@@ -103,14 +76,10 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         const rid = socket.data.room;
-        if (rid && rooms[rid] && rooms[rid].players[socket.id]) {
+        if (rid && rooms[rid]) {
             delete rooms[rid].players[socket.id];
             io.to(rid).emit('playerLeft', socket.id);
-            console.log(`[NET] ${socket.id} salió de ${rid}`);
-            
-            if(Object.keys(rooms[rid].players).length === 0) {
-                delete rooms[rid];
-            }
+            if(Object.keys(rooms[rid].players).length === 0) delete rooms[rid];
         }
     });
 });
@@ -125,52 +94,49 @@ function joinPlayer(socket, roomId) {
     rooms[roomId].players[socket.id] = {
         id: socket.id,
         color: `hsl(${hue}, 100%, 50%)`,
-        x: 0, z: 0, // Posición lógica (Lateral, Distancia)
+        dist: 0,   // Distancia recorrida en la pista
+        lat: 0,    // Desplazamiento lateral (centro = 0)
         speed: 0,
-        heading: 0,
         input: { steer: 0, gas: false, brake: false }
     };
 }
 
-// --- BUCLE FÍSICO (Server-side Authority light) ---
+// --- BUCLE FÍSICO (Lógica Lineal Abstracta) ---
 setInterval(() => {
     for (const rid in rooms) {
         const r = rooms[rid];
         const updateData = [];
         
-        // Factores físicos basados en config de sala
-        const MAX_SPEED = CONFIG.BASE_SPEED * (r.config.maxKmh / 100);
-        const ACCEL = (CONFIG.BASE_SPEED * (r.config.accel / 100)) / 60;
-
         for (const pid in r.players) {
             const p = r.players[pid];
             
-            // 1. Velocidad
-            if (p.input.gas) p.speed = Math.min(p.speed + ACCEL, MAX_SPEED);
-            else if (p.input.brake) p.speed = Math.max(p.speed - ACCEL*2, 0);
-            else p.speed *= 0.98; // Fricción
+            // 1. Velocidad (Simulación simple)
+            const targetSpeed = p.input.gas ? CONFIG.BASE_SPEED : (p.input.brake ? 0 : p.speed * 0.98);
+            
+            // Aceleración suave
+            if(p.speed < targetSpeed) p.speed += 0.01;
+            else p.speed -= 0.02;
+            
+            if(p.speed < 0) p.speed = 0;
 
-            // 2. Dirección
-            const speedFactor = Math.max(0.2, 1 - (p.speed / MAX_SPEED));
-            p.heading += p.input.steer * 0.05 * speedFactor;
+            // 2. Movimiento Lateral (Basado en input steer)
+            // Cuanto más rápido, más sensible
+            const steerForce = p.input.steer * p.speed * 0.15;
+            p.lat -= steerForce; // Invertido para coincidir visualmente
 
-            // 3. Movimiento (Simplificado: Z avanza, X es lateral)
-            p.z += p.speed;
-            p.x += p.speed * Math.sin(p.heading);
+            // 3. Avance
+            p.dist += p.speed;
 
-            // 4. Colisión muros
-            if (Math.abs(p.x) > CONFIG.WALL_LIMIT) {
-                p.x = Math.sign(p.x) * CONFIG.WALL_LIMIT;
-                p.speed *= 0.8;
-                p.heading *= -0.5; // Rebote
+            // 4. Colisión Muros
+            if (Math.abs(p.lat) > CONFIG.WALL_LIMIT) {
+                p.lat = Math.sign(p.lat) * CONFIG.WALL_LIMIT;
+                p.speed *= 0.9; // Fricción contra muro
             }
 
-            // Datos mínimos para enviar
             updateData.push({
                 i: p.id,
-                x: parseFloat(p.x.toFixed(2)),
-                z: parseFloat(p.z.toFixed(2)),
-                h: parseFloat(p.heading.toFixed(2)),
+                d: parseFloat(p.dist.toFixed(2)),
+                l: parseFloat(p.lat.toFixed(2)),
                 s: parseFloat(p.speed.toFixed(3)),
                 c: p.color
             });
