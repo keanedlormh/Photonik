@@ -29,7 +29,7 @@ const state = {
 };
 
 // ==========================================
-// SISTEMA RNG (Determinista)
+// SISTEMA RNG
 // ==========================================
 function mulberry32(a) {
     return function() {
@@ -43,7 +43,7 @@ let rng = mulberry32(1);
 function setSeed(s) { rng = mulberry32(s); }
 
 // ==========================================
-// UI Y RED
+// RED Y UI
 // ==========================================
 let socket;
 const ui = {
@@ -66,7 +66,7 @@ document.getElementById('btn-join').onclick = () => {
 window.joinRoomId = (id) => socket.emit('joinRoom', id);
 
 function initNetwork() {
-    document.getElementById('status').innerText = "Conectando al servidor...";
+    document.getElementById('status').innerText = "Conectando...";
     socket = io();
 
     socket.on('connect', () => {
@@ -78,10 +78,10 @@ function initNetwork() {
 
     socket.on('roomList', (list) => {
         ui.roomList.innerHTML = '';
-        if(list.length === 0) ui.roomList.innerHTML = '<div style="padding:10px;">No hay salas activas.</div>';
+        if(list.length === 0) ui.roomList.innerHTML = '<div style="padding:10px;">No hay salas.</div>';
         list.forEach(r => {
             ui.roomList.innerHTML += `<div class="room-item">
-                <span>SALA <b>${r.id}</b> <small>(${r.players} PILOTOS)</small></span>
+                <span>SALA <b>${r.id}</b> <small>(${r.players})</small></span>
                 <button class="main-btn secondary" onclick="window.joinRoomId('${r.id}')" style="width:80px;">ENTRAR</button>
             </div>`;
         });
@@ -116,7 +116,7 @@ function startGame(data) {
 }
 
 // ==========================================
-// MOTOR GRÁFICO 3D
+// MOTOR GRÁFICO
 // ==========================================
 let scene, camera, renderer, composer;
 let chunks = [];
@@ -124,23 +124,31 @@ let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = []; const smokeGroup = new THREE.Group();
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
-// MATERIALES
+// MATERIALES REFINADOS
 const matRoad = new THREE.MeshStandardMaterial({ 
-    color: 0x111111, roughness: 0.8, metalness: 0.1, flatShading: false
+    color: 0x080808, // Negro asfalto profundo
+    roughness: 0.6,  // Un poco más liso para reflejos suaves
+    metalness: 0.1,
+    flatShading: false // IMPORTANTE: Sombreado suave
 }); 
-const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1 });
-const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffcc00 }); 
+const matWall = new THREE.MeshStandardMaterial({ 
+    color: 0xaaaaaa, 
+    roughness: 0.4, 
+    metalness: 0.1,
+    flatShading: false // IMPORTANTE: Muros curvos suaves
+});
+const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffaa00 }); 
 const matLineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
-const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.2, metalness: 0.5, flatShading: true });
-const matPillar = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
-const matLeaves = new THREE.MeshStandardMaterial({color: 0x2e7d32});
-const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
-const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdddddd, emissiveIntensity: 0.2, flatShading: true });
-const matAtmosphere = new THREE.PointsMaterial({ size: 0.5, color: 0xffffff, transparent: true, opacity: 0.4 });
+const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.2, metalness: 0.6, flatShading: true });
+const matPillar = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.9 });
+const matLeaves = new THREE.MeshStandardMaterial({color: 0x1b5e20, flatShading: true}); // Low poly look para arboles
+const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723, flatShading: true });
+const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdddddd, emissiveIntensity: 0.1, flatShading: true });
+const matAtmosphere = new THREE.PointsMaterial({ size: 0.3, color: 0xffffff, transparent: true, opacity: 0.3, sizeAttenuation: true });
 
 function initThreeJS() {
     scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x87CEEB, 0.0025);
+    scene.fog = new THREE.FogExp2(0x87CEEB, 0.002);
 
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
     camera.position.set(0, 5, -10);
@@ -157,7 +165,7 @@ function initThreeJS() {
 
     const renderPass = new RenderPass(scene, camera);
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-    bloomPass.threshold = 0.8; bloomPass.strength = 0.25; bloomPass.radius = 0.2;
+    bloomPass.threshold = 0.85; bloomPass.strength = 0.2; bloomPass.radius = 0.3;
     
     composer = new EffectComposer(renderer);
     composer.addPass(renderPass);
@@ -172,7 +180,7 @@ function initThreeJS() {
 }
 
 function setupEnvironment() {
-    ambientLight = new THREE.AmbientLight(0x404040, 1.8); scene.add(ambientLight);
+    ambientLight = new THREE.AmbientLight(0x404040, 1.5); scene.add(ambientLight);
     sunLight = new THREE.DirectionalLight(0xffdf80, 2.5);
     sunLight.castShadow = true; 
     sunLight.shadow.mapSize.set(2048, 2048);
@@ -182,7 +190,7 @@ function setupEnvironment() {
     scene.add(sunLight);
     sunMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00, fog: false }));
     scene.add(sunMesh);
-    moonLight = new THREE.DirectionalLight(0x88ccff, 3.0); scene.add(moonLight);
+    moonLight = new THREE.DirectionalLight(0x88ccff, 2.0); scene.add(moonLight);
     moonMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false }));
     scene.add(moonMesh);
     
@@ -194,7 +202,7 @@ function setupEnvironment() {
 }
 
 // ==========================================
-// GENERACIÓN PROCEDURAL
+// GENERACIÓN PROCEDURAL (SMOOTH SHADING)
 // ==========================================
 const noisePerm = new Uint8Array(512); const p = new Uint8Array(256);
 for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
@@ -239,48 +247,100 @@ class Chunk {
     }
 
     buildStructure() {
-        const div = 25; 
+        // Mayor subdivisión para curvas más suaves
+        const div = 30; 
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
         
-        const roadV = [], roadN = [];
+        // 1. CARRETERA SUAVE (Shared Vertices)
+        // Generamos vértices Izquierda y Derecha para cada paso.
+        // Total vértices = (div + 1) * 2
+        const roadVerts = [];
         for(let i=0; i<=div; i++) {
-            const p = pts[i]; const n = frames.binormals[i]; const up = frames.normals[i];
-            const l = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
-            const r = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
-            roadV.push(l.x, l.y, l.z, r.x, r.y, r.z);
-            roadN.push(up.x, up.y, up.z, up.x, up.y, up.z);
+            const p = pts[i]; 
+            const n = frames.binormals[i];
+            
+            // Izquierda
+            roadVerts.push(p.x + n.x * CONFIG.ROAD_WIDTH_HALF, p.y, p.z + n.z * CONFIG.ROAD_WIDTH_HALF);
+            // Derecha
+            roadVerts.push(p.x - n.x * CONFIG.ROAD_WIDTH_HALF, p.y, p.z - n.z * CONFIG.ROAD_WIDTH_HALF);
         }
-        const roadMesh = new THREE.Mesh(createStripGeometry(roadV, roadN), matRoad);
-        roadMesh.receiveShadow = true; 
+        const roadGeo = createContinuousMesh(roadVerts, div, 2);
+        const roadMesh = new THREE.Mesh(roadGeo, matRoad);
+        roadMesh.receiveShadow = true;
         this.group.add(roadMesh);
-        this.createWallExtrusion(pts, frames, 1);
-        this.createWallExtrusion(pts, frames, -1);
+
+        // 2. MUROS SUAVES
+        // Cada muro es una tira.
+        this.createSmoothWall(pts, frames, 1); // Izq
+        this.createSmoothWall(pts, frames, -1); // Der
+
+        // 3. LÍNEAS (Dash simple)
         this.createRoadLines(pts, frames);
     }
 
-    createWallExtrusion(pts, frames, side) {
-        const verts = [], norms = [];
-        const offsetInner = CONFIG.ROAD_WIDTH_HALF;
-        const offsetOuter = CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH;
+    createSmoothWall(pts, frames, side) {
+        // Generamos 3 tiras continuas: Inner, Top, Outer
+        // Para que sea "Smooth" a lo largo de la curva pero "Hard" en las esquinas del muro,
+        // necesitamos geometrías separadas o usar split vertices. Usaremos geometrías separadas por cara para simplicidad y corrección de shading.
+        
         const h = CONFIG.WALL_HEIGHT;
-        const thickness = 0.8;
+        const w = CONFIG.WALL_WIDTH;
+        const div = pts.length - 1;
 
-        for(let i=0; i<pts.length-1; i++) {
-            const p1 = pts[i]; const n1 = frames.binormals[i].clone().multiplyScalar(side);
-            const p2 = pts[i+1]; const n2 = frames.binormals[i+1].clone().multiplyScalar(side);
-            const p1In = p1.clone().add(n1.clone().multiplyScalar(offsetInner));
-            const p1Out = p1.clone().add(n1.clone().multiplyScalar(offsetOuter));
-            const p2In = p2.clone().add(n2.clone().multiplyScalar(offsetInner));
-            const p2Out = p2.clone().add(n2.clone().multiplyScalar(offsetOuter));
-
-            pushQuad(verts, norms, new THREE.Vector3(p1Out.x, p1Out.y+h, p1Out.z), new THREE.Vector3(p1In.x, p1In.y+h, p1In.z), new THREE.Vector3(p2Out.x, p2Out.y+h, p2Out.z), new THREE.Vector3(p2In.x, p2In.y+h, p2In.z), new THREE.Vector3(0, 1, 0));
-            pushQuad(verts, norms, new THREE.Vector3(p1In.x, p1In.y+h, p1In.z), new THREE.Vector3(p1In.x, p1In.y-thickness, p1In.z), new THREE.Vector3(p2In.x, p2In.y+h, p2In.z), new THREE.Vector3(p2In.x, p2In.y-thickness, p2In.z), n1.clone().negate());
-            pushQuad(verts, norms, new THREE.Vector3(p1Out.x, p1Out.y-thickness, p1Out.z), new THREE.Vector3(p1Out.x, p1Out.y+h, p1Out.z), new THREE.Vector3(p2Out.x, p2Out.y-thickness, p2Out.z), new THREE.Vector3(p2Out.x, p2Out.y+h, p2Out.z), n1);
+        // -- TOP FACE (Cara Superior) --
+        const topVerts = [];
+        for(let i=0; i<=div; i++) {
+            const p = pts[i]; const n = frames.binormals[i].clone().multiplyScalar(side);
+            // Inner Point
+            topVerts.push(p.x + n.x * CONFIG.ROAD_WIDTH_HALF, p.y + h, p.z + n.z * CONFIG.ROAD_WIDTH_HALF);
+            // Outer Point
+            topVerts.push(p.x + n.x * (CONFIG.ROAD_WIDTH_HALF + w), p.y + h, p.z + n.z * (CONFIG.ROAD_WIDTH_HALF + w));
         }
-        const mesh = new THREE.Mesh(createStripGeometry(verts, norms), matWall);
-        mesh.castShadow = true; mesh.receiveShadow = true;
-        this.group.add(mesh);
+        const topGeo = createContinuousMesh(topVerts, div, 2);
+        const topMesh = new THREE.Mesh(topGeo, matWall);
+        topMesh.castShadow = true; topMesh.receiveShadow = true;
+        this.group.add(topMesh);
+
+        // -- INNER FACE (Cara Interna) --
+        const innerVerts = [];
+        for(let i=0; i<=div; i++) {
+            const p = pts[i]; const n = frames.binormals[i].clone().multiplyScalar(side);
+            const x = p.x + n.x * CONFIG.ROAD_WIDTH_HALF;
+            const z = p.z + n.z * CONFIG.ROAD_WIDTH_HALF;
+            // Top
+            innerVerts.push(x, p.y + h, z);
+            // Bottom (Extendemos un poco hacia abajo para tapar huecos)
+            innerVerts.push(x, p.y - 0.5, z);
+        }
+        const innerGeo = createContinuousMesh(innerVerts, div, 2);
+        const innerMesh = new THREE.Mesh(innerGeo, matWall);
+        innerMesh.receiveShadow = true;
+        this.group.add(innerMesh);
+
+        // -- OUTER FACE (Cara Externa) --
+        const outerVerts = [];
+        for(let i=0; i<=div; i++) {
+            const p = pts[i]; const n = frames.binormals[i].clone().multiplyScalar(side);
+            const x = p.x + n.x * (CONFIG.ROAD_WIDTH_HALF + w);
+            const z = p.z + n.z * (CONFIG.ROAD_WIDTH_HALF + w);
+            // Top
+            outerVerts.push(x, p.y + h, z);
+            // Bottom
+            outerVerts.push(x, p.y - 0.5, z);
+        }
+        const outerGeo = createContinuousMesh(outerVerts, div, 2);
+        // Invertimos índices para que mire hacia afuera? createContinuousMesh asume orden strip.
+        // Si el orden de vértices cruza la normal, se verá negro. Ajustaremos el material a DoubleSide si es necesario o el orden de push.
+        // Para outer, el orden estándar debería funcionar si la cámara está fuera, pero queremos que se vea bien.
+        // matWall es standard, así que culling importa.
+        // Solución simple: Side = DoubleSide para los muros laterales para evitar líos de winding order en curvas complejas.
+        const matWallDouble = matWall.clone(); 
+        matWallDouble.side = THREE.DoubleSide;
+        
+        const outerMesh = new THREE.Mesh(outerGeo, matWallDouble);
+        outerMesh.castShadow = true;
+        this.group.add(outerMesh);
     }
 
     createRoadLines(pts, frames) {
@@ -330,12 +390,10 @@ class Chunk {
     }
 
     buildProps() {
-        // Pilares corregidos (Más bajos para evitar clipping)
         for(let i=0; i<=1; i+=0.15) {
             const p = this.curve.getPointAt(i);
             const th = getTerrainHeight(p.x, p.z);
             if(p.y > th + 4) {
-                // RESTAMOS 0.5 A LA ALTURA SUPERIOR
                 const h = (p.y - 0.5) - th; 
                 const pil = new THREE.Mesh(new THREE.BoxGeometry(6, h, 4), matPillar);
                 pil.position.set(p.x, th + h/2, p.z);
@@ -343,6 +401,7 @@ class Chunk {
                 this.group.add(pil);
             }
         }
+        // Árboles
         for(let i=0; i<8; i++) {
             const t = rng(); const side = rng() > 0.5 ? 1 : -1; const dist = CONFIG.ROAD_WIDTH_HALF + 15 + rng() * 60;
             const p = this.curve.getPointAt(t); const tan = this.curve.getTangentAt(t);
@@ -360,35 +419,35 @@ class Chunk {
     }
 
     buildClouds() {
-        // Nubes procedurales (Cúmulos Low Poly)
-        if (rng() > 0.4) { // 60% probabilidad de nube por chunk
+        // MÁS NUBES (Probabilidad aumentada a > 0.2)
+        if (rng() > 0.2) { 
             const cloud = new THREE.Group();
-            const segs = 3 + Math.floor(rng() * 4);
+            const segs = 4 + Math.floor(rng() * 5); // Nubes más complejas
             for(let i=0; i<segs; i++) {
-                const size = 5 + rng() * 8;
+                const size = 6 + rng() * 10;
                 const m = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), matCloud);
-                m.position.set((rng()-0.5)*15, (rng()-0.5)*5, (rng()-0.5)*15);
+                m.position.set((rng()-0.5)*20, (rng()-0.5)*8, (rng()-0.5)*20);
                 m.castShadow = true;
                 cloud.add(m);
             }
             const p = this.curve.getPointAt(0.5);
-            cloud.position.set(p.x + (rng()-0.5)*300, 40 + rng()*40, p.z + (rng()-0.5)*300);
+            cloud.position.set(p.x + (rng()-0.5)*400, 50 + rng()*40, p.z + (rng()-0.5)*400);
             this.group.add(cloud);
         }
     }
 
     buildAtmosphere() {
-        // Partículas atmosféricas aleatorias (Sin sync, client side puro)
+        // MUCHAS MÁS PARTÍCULAS (x5)
         const pGeo = new THREE.BufferGeometry();
         const pPos = [];
-        const count = 50; 
+        const count = 250; 
         for(let i=0; i<count; i++) {
-            const t = Math.random(); // Random local, no rng()
+            const t = Math.random(); 
             const p = this.curve.getPointAt(t);
             pPos.push(
-                p.x + (Math.random()-0.5) * 100,
-                p.y + Math.random() * 30,
-                p.z + (Math.random()-0.5) * 100
+                p.x + (Math.random()-0.5) * 120,
+                p.y + Math.random() * 40,
+                p.z + (Math.random()-0.5) * 120
             );
         }
         pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
@@ -399,14 +458,47 @@ class Chunk {
     dispose() { scene.remove(this.group); this.group.traverse(o => { if(o.geometry) o.geometry.dispose(); }); }
 }
 
-// Helpers Geometría
+// ==========================================
+// UTILS GEOMETRÍA CONTINUA (SMOOTH)
+// ==========================================
+// Crea una malla continua tipo "Triangle Strip" indexado
+// verts: Array plano [x1,y1,z1, x2,y2,z2...]
+// rows: Número de segmentos a lo largo de la curva
+// cols: Número de vértices transversales (Para carretera es 2: Izq y Der)
+function createContinuousMesh(verts, rows, cols) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    
+    const indices = [];
+    // Generar índices para conectar la rejilla
+    // Si cols=2 (Road): 
+    // 0 -- 2 -- 4
+    // |  / |  / |
+    // 1 -- 3 -- 5
+    for(let i=0; i<rows; i++) {
+        for(let j=0; j<cols-1; j++) {
+            // Indices de los 4 vértices del quad
+            const a = i * cols + j;
+            const b = (i + 1) * cols + j;
+            const c = (i + 1) * cols + (j + 1);
+            const d = i * cols + (j + 1);
+            
+            // Dos triángulos por quad
+            indices.push(a, b, d);
+            indices.push(b, c, d);
+        }
+    }
+    geo.setIndex(indices);
+    geo.computeVertexNormals(); // ESTO ES LA CLAVE PARA EL SMOOTH SHADING
+    return geo;
+}
+
 function pushQuad(verts, norms, tl, bl, tr, br, norm) {
     verts.push(tl.x, tl.y, tl.z, bl.x, bl.y, bl.z, tr.x, tr.y, tr.z);
     verts.push(tr.x, tr.y, tr.z, bl.x, bl.y, bl.z, br.x, br.y, br.z);
-    if(norm) {
-        for(let k=0; k<6; k++) norms.push(norm.x, norm.y, norm.z);
-    }
+    if(norm) { for(let k=0; k<6; k++) norms.push(norm.x, norm.y, norm.z); }
 }
+
 function createStripGeometry(verts, norms) {
     const g = new THREE.BufferGeometry();
     const idx = [];
@@ -417,6 +509,7 @@ function createStripGeometry(verts, norms) {
     g.setIndex(idx);
     return g;
 }
+
 function createGridGeometry(verts, colors, rows, cols) {
     const g = new THREE.BufferGeometry(); const idx = [];
     for(let i=0; i<rows; i++) for(let j=0; j<cols; j++) {
@@ -516,56 +609,70 @@ function updateWorldState(data) {
     });
 }
 
-// COLORES PARA EL CICLO
-const cDay = new THREE.Color(0x87CEEB);
-const cSunset = new THREE.Color(0xff8c00); // Naranja fuerte
-const cNight = new THREE.Color(0x050510);
-const cAmbientDay = new THREE.Color(0x404040);
-const cAmbientNight = new THREE.Color(0x111111);
+// ==========================================
+// CICLO DÍA / NOCHE PROGRESIVO
+// ==========================================
+const COLORS = {
+    night: new THREE.Color(0x020205),
+    dawn: new THREE.Color(0xFD5E53),  // Rojo Amanecer
+    day: new THREE.Color(0x00BFFF),   // Azul Cielo
+    dusk: new THREE.Color(0x4B0082)   // Violeta Atardecer
+};
 
 function animate() {
     requestAnimationFrame(animate);
     if(state.inGame) {
         socket.emit('playerInput', state.input);
         
-        // CICLO DÍA / NOCHE SUAVE
-        const time = Date.now() * 0.0001;
+        const time = Date.now() * 0.00005; // Ciclo más lento para apreciar los cambios
         if(state.players[state.myId]) {
             const carPos = state.players[state.myId].mesh.position;
-            sunLight.position.set(carPos.x + Math.cos(time)*1000, Math.sin(time)*1000, carPos.z);
+            
+            // Posición Sol/Luna
+            sunLight.position.set(carPos.x + Math.cos(time)*1500, Math.sin(time)*1500, carPos.z);
             sunLight.target.position.copy(carPos); sunMesh.position.copy(sunLight.position);
-            moonLight.position.set(carPos.x - Math.cos(time)*1000, -Math.sin(time)*1000, carPos.z);
+            moonLight.position.set(carPos.x - Math.cos(time)*1500, -Math.sin(time)*1500, carPos.z);
             moonMesh.position.copy(moonLight.position);
 
+            // Interpolación de colores (Ciclo completo)
             const sin = Math.sin(time);
-            let targetColor = new THREE.Color();
-            
-            // Interpolación de colores del cielo
-            if (sin > 0.2) { // Día Pleno
-                targetColor.copy(cDay);
-                starField.material.opacity = 0;
-                ambientLight.color.copy(cAmbientDay);
-            } else if (sin < -0.2) { // Noche Plena
-                targetColor.copy(cNight);
-                starField.material.opacity = 1;
-                ambientLight.color.copy(cAmbientNight);
-            } else { // Transición (Amanecer / Atardecer)
-                const t = (sin + 0.2) / 0.4; // Normalizar a 0-1
-                if (sin > 0) { // Amanecer/Atardecer hacia día
-                    targetColor.copy(cSunset).lerp(cDay, t);
-                    starField.material.opacity = 1 - t;
-                } else { // Atardecer hacia noche
-                    targetColor.copy(cNight).lerp(cSunset, t);
-                    starField.material.opacity = 1 - t;
-                }
-                ambientLight.color.copy(cAmbientNight).lerp(cAmbientDay, t);
+            let target = new THREE.Color();
+            let opacityStars = 0;
+
+            if (sin < -0.4) { 
+                // NOCHE PROFUNDA
+                target.copy(COLORS.night); 
+                opacityStars = 1; 
+            } else if (sin < 0.1) {
+                // AMANECER (Noche -> Dawn)
+                const t = (sin + 0.4) / 0.5; // Norm 0-1
+                target.copy(COLORS.night).lerp(COLORS.dawn, t);
+                opacityStars = 1 - t;
+            } else if (sin < 0.4) {
+                // MAÑANA (Dawn -> Day)
+                const t = (sin - 0.1) / 0.3;
+                target.copy(COLORS.dawn).lerp(COLORS.day, t);
+                opacityStars = 0;
+            } else if (sin < 0.8) {
+                // DÍA PLENO
+                target.copy(COLORS.day);
+                opacityStars = 0;
+            } else {
+                // ATARDECER (Day -> Dusk -> Night rapidito)
+                const t = (sin - 0.8) / 0.2;
+                target.copy(COLORS.day).lerp(COLORS.dusk, t);
+                opacityStars = t * 0.5;
             }
 
-            scene.background = targetColor;
-            scene.fog.color.copy(targetColor);
-            
-            // Estrellas siguen al jugador para no salirse
+            // Aplicar
+            scene.background = target;
+            scene.fog.color.copy(target);
+            starField.material.opacity = opacityStars;
             starField.position.copy(carPos);
+            
+            // Ajustar intensidad luces ambiental
+            const ambInt = Math.max(0.2, sin + 0.5); // Min 0.2 noche, Max 1.5 día
+            ambientLight.intensity = ambInt;
         }
 
         for(let i=smokeParticles.length-1; i>=0; i--) {
