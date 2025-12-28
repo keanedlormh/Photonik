@@ -12,27 +12,31 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
+// Ajustes físicos del servidor
 const CONFIG = {
     FPS: 60,
-    BASE_SPEED: 0.8, // Velocidad base ajustada
-    WALL_LIMIT: 6.8  // Un poco menos que el cliente para evitar glitch visual
+    // Velocidad base para cálculos lógicos (ajustada para coincidir visualmente)
+    BASE_SPEED: 0.8, 
+    // Límite lateral lógico
+    WALL_LIMIT: 6.8  
 };
 
 const rooms = {}; 
 
 io.on('connection', (socket) => {
-    console.log(`[NET] Cliente: ${socket.id}`);
+    console.log(`[NET] Cliente conectado: ${socket.id}`);
 
+    // --- GESTIÓN DE SALAS ---
     socket.on('getRooms', () => {
         const list = [];
         for (const rid in rooms) {
             const r = rooms[rid];
             if (Object.keys(r.players).length > 0) {
-                list.push({ id: r.id, players: Object.keys(r.players).length });
+                list.push({ 
+                    id: r.id, 
+                    players: Object.keys(r.players).length,
+                    config: r.config
+                });
             } else {
                 delete rooms[rid];
             }
@@ -41,14 +45,17 @@ io.on('connection', (socket) => {
     });
 
     socket.on('createRoom', (data) => {
-        const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+        const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
+        
         rooms[roomId] = {
             id: roomId,
             players: {},
-            // Semilla vital para que todos generen la misma pista
-            seed: Math.floor(Math.random() * 100000) + 1 
+            config: { maxKmh: data.maxKmh || 500 },
+            // SEMILLA MAESTRA: Esto sincroniza el mundo procedural
+            seed: Math.floor(Math.random() * 99999) + 1 
         };
-        console.log(`[SALA] Creada ${roomId} Seed: ${rooms[roomId].seed}`);
+        
+        console.log(`[SALA] ${roomId} creada. Seed: ${rooms[roomId].seed}`);
         socket.emit('roomCreated', { roomId, seed: rooms[roomId].seed });
         joinPlayer(socket, roomId);
     });
@@ -88,20 +95,20 @@ function joinPlayer(socket, roomId) {
     socket.data.room = roomId;
     socket.join(roomId);
 
-    // Color aleatorio HSL
+    // Color aleatorio
     const hue = Math.floor(Math.random() * 360);
     
     rooms[roomId].players[socket.id] = {
         id: socket.id,
         color: `hsl(${hue}, 100%, 50%)`,
-        dist: 0,   // Distancia recorrida en la pista
-        lat: 0,    // Desplazamiento lateral (centro = 0)
+        dist: 0,    // Distancia lineal recorrida
+        lat: 0,     // Desplazamiento lateral (-7 a 7 aprox)
         speed: 0,
         input: { steer: 0, gas: false, brake: false }
     };
 }
 
-// --- BUCLE FÍSICO (Lógica Lineal Abstracta) ---
+// --- BUCLE DE FÍSICAS (60 FPS) ---
 setInterval(() => {
     for (const rid in rooms) {
         const r = rooms[rid];
@@ -110,29 +117,29 @@ setInterval(() => {
         for (const pid in r.players) {
             const p = r.players[pid];
             
-            // 1. Velocidad (Simulación simple)
+            // Físicas Arcade Simplificadas para Servidor
             const targetSpeed = p.input.gas ? CONFIG.BASE_SPEED : (p.input.brake ? 0 : p.speed * 0.98);
             
-            // Aceleración suave
-            if(p.speed < targetSpeed) p.speed += 0.01;
-            else p.speed -= 0.02;
+            // Inercia
+            if(p.speed < targetSpeed) p.speed += 0.015;
+            else p.speed -= 0.03;
             
             if(p.speed < 0) p.speed = 0;
 
-            // 2. Movimiento Lateral (Basado en input steer)
-            // Cuanto más rápido, más sensible
-            const steerForce = p.input.steer * p.speed * 0.15;
-            p.lat -= steerForce; // Invertido para coincidir visualmente
+            // Giro (más rápido = más sensible hasta cierto punto)
+            const steerForce = p.input.steer * p.speed * 0.12;
+            p.lat -= steerForce; 
 
-            // 3. Avance
+            // Avance
             p.dist += p.speed;
 
-            // 4. Colisión Muros
+            // Colisiones con Muros
             if (Math.abs(p.lat) > CONFIG.WALL_LIMIT) {
                 p.lat = Math.sign(p.lat) * CONFIG.WALL_LIMIT;
-                p.speed *= 0.9; // Fricción contra muro
+                p.speed *= 0.9; // Fricción muro
             }
 
+            // Datos mínimos para red
             updateData.push({
                 i: p.id,
                 d: parseFloat(p.dist.toFixed(2)),
@@ -148,5 +155,5 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`SERVIDOR LISTO EN PUERTO ${PORT}`);
+    console.log(`SERVIDOR OK EN PUERTO ${PORT}`);
 });
