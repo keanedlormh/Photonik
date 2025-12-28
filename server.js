@@ -12,13 +12,11 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Ajustes físicos del servidor
+// Configuración Físicas Servidor
 const CONFIG = {
     FPS: 60,
-    // Velocidad base para cálculos lógicos (ajustada para coincidir visualmente)
     BASE_SPEED: 0.8, 
-    // Límite lateral lógico
-    WALL_LIMIT: 6.8  
+    WALL_LIMIT: 6.8
 };
 
 const rooms = {}; 
@@ -26,7 +24,7 @@ const rooms = {};
 io.on('connection', (socket) => {
     console.log(`[NET] Cliente conectado: ${socket.id}`);
 
-    // --- GESTIÓN DE SALAS ---
+    // Listar salas
     socket.on('getRooms', () => {
         const list = [];
         for (const rid in rooms) {
@@ -44,6 +42,7 @@ io.on('connection', (socket) => {
         socket.emit('roomList', list);
     });
 
+    // Crear sala
     socket.on('createRoom', (data) => {
         const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
         
@@ -51,7 +50,7 @@ io.on('connection', (socket) => {
             id: roomId,
             players: {},
             config: { maxKmh: data.maxKmh || 500 },
-            // SEMILLA MAESTRA: Esto sincroniza el mundo procedural
+            // SEMILLA MAESTRA: Sincroniza el mundo procedural
             seed: Math.floor(Math.random() * 99999) + 1 
         };
         
@@ -60,6 +59,7 @@ io.on('connection', (socket) => {
         joinPlayer(socket, roomId);
     });
 
+    // Unirse
     socket.on('joinRoom', (roomId) => {
         if(!roomId) return;
         roomId = roomId.toUpperCase();
@@ -74,6 +74,7 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Input
     socket.on('playerInput', (input) => {
         const rid = socket.data.room;
         if (rid && rooms[rid] && rooms[rid].players[socket.id]) {
@@ -101,14 +102,14 @@ function joinPlayer(socket, roomId) {
     rooms[roomId].players[socket.id] = {
         id: socket.id,
         color: `hsl(${hue}, 100%, 50%)`,
-        dist: 0,    // Distancia lineal recorrida
-        lat: 0,     // Desplazamiento lateral (-7 a 7 aprox)
+        dist: 0,
+        lat: 0,
         speed: 0,
         input: { steer: 0, gas: false, brake: false }
     };
 }
 
-// --- BUCLE DE FÍSICAS (60 FPS) ---
+// Bucle Físico Servidor
 setInterval(() => {
     for (const rid in rooms) {
         const r = rooms[rid];
@@ -117,29 +118,23 @@ setInterval(() => {
         for (const pid in r.players) {
             const p = r.players[pid];
             
-            // Físicas Arcade Simplificadas para Servidor
+            // Lógica simplificada de movimiento para servidor
             const targetSpeed = p.input.gas ? CONFIG.BASE_SPEED : (p.input.brake ? 0 : p.speed * 0.98);
             
-            // Inercia
             if(p.speed < targetSpeed) p.speed += 0.015;
             else p.speed -= 0.03;
-            
             if(p.speed < 0) p.speed = 0;
 
-            // Giro (más rápido = más sensible hasta cierto punto)
             const steerForce = p.input.steer * p.speed * 0.12;
             p.lat -= steerForce; 
 
-            // Avance
             p.dist += p.speed;
 
-            // Colisiones con Muros
             if (Math.abs(p.lat) > CONFIG.WALL_LIMIT) {
                 p.lat = Math.sign(p.lat) * CONFIG.WALL_LIMIT;
-                p.speed *= 0.9; // Fricción muro
+                p.speed *= 0.9;
             }
 
-            // Datos mínimos para red
             updateData.push({
                 i: p.id,
                 d: parseFloat(p.dist.toFixed(2)),
