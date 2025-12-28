@@ -1,608 +1,382 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
-import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
-
-// FIREBASE IMPORTS
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // ==========================================
-// CONFIGURACIÓN Y ESTADO
+// LOGGER VISUAL
 // ==========================================
-const BASE_SPEED = 0.45; 
-const ROAD_WIDTH_HALF = 8.5; 
-const WALL_WIDTH = 1.5; 
-const WALL_HEIGHT = 1.2;
-const CAR_WIDTH_HALF = 1.0;
-const WALL_LIMIT = ROAD_WIDTH_HALF - CAR_WIDTH_HALF - 0.2;
+const consoleEl = document.getElementById('debug-console');
+function logToScreen(msg, type='info') {
+    const line = document.createElement('div');
+    const time = new Date().toLocaleTimeString().split(' ')[0];
+    line.innerText = `[${time}] ${msg}`;
+    if(type === 'error') line.style.color = '#ff3333';
+    if(type === 'success') line.style.color = '#33ff33';
+    if(type === 'warn') line.style.color = '#ffff33';
+    
+    consoleEl.appendChild(line);
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+    console.log(msg); // Tambien a consola navegador
+}
+
+// ==========================================
+// SOCKET.IO & STATE
+// ==========================================
+// IMPORTANTE: Asegúrate de que el servidor (server.js) esté corriendo.
+const socket = io(); // Conexión automática al host que sirve la página
 
 const state = {
-    // Multiplayer State
-    user: null,
-    roomId: null,
-    isHost: false,
-    playerColor: '#' + Math.floor(Math.random()*16777215).toString(16), // Color aleatorio
-    remotePlayers: {}, // Mapa de coches remotos { uid: { mesh, targetPos, targetRot } }
-    lastUpload: 0,
-
-    // Config (Set by Host)
-    config: {
-        maxKmh: 500,
-        accel: 40,
-        seed: Math.random() * 10000 // Semilla compartida
-    },
-
-    // Local Physics
-    manualSpeed: 0.0,
-    worldHeading: 0.0,
-    lateralOffset: 0.0,
-    trackDist: 0.0,
+    gameStarted: false,
+    isConnected: false,
+    myId: null,
     
-    // Inputs
-    inputSteer: 0.0,
-    inputGas: false,
-    inputBrake: false,
-    
-    // Settings
+    // Client config
     steeringInverted: false,
-    steerSensitivity: 60,   
-    menuOpen: false
+    steerSensitivity: 60,
+    steerStiffness: 50,
+    
+    // Inputs actuales
+    input: { steer: 0, gas: false, brake: false }
 };
 
-// ==========================================
-// FIREBASE SETUP
-// ==========================================
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+// Listeners Socket
+socket.on('connect', () => {
+    state.isConnected = true;
+    state.myId = socket.id;
+    document.getElementById('server-status').innerText = "Conectado. ID: " + socket.id;
+    document.getElementById('server-status').style.color = "#00ff00";
+    logToScreen(`Conectado al servidor. Socket ID: ${socket.id}`, 'success');
+});
 
-// Auth
-const initAuth = async () => {
-    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-    } else {
-        await signInAnonymously(auth);
-    }
-};
-initAuth();
+socket.on('disconnect', () => {
+    state.isConnected = false;
+    logToScreen("Desconectado del servidor.", 'error');
+});
 
-onAuthStateChanged(auth, (u) => {
-    if(u) {
-        state.user = u;
-        console.log("Logged in as", u.uid);
-        refreshRoomList();
+socket.on('roomCreated', (data) => {
+    logToScreen(`Sala creada: ${data.roomId} (Seed: ${data.seed.toFixed(2)})`, 'success');
+    alert(`Sala Creada! Código: ${data.roomId}`);
+    startGame(data.seed);
+});
+
+socket.on('roomJoined', (data) => {
+    logToScreen(`Unido a sala: ${data.roomId}`, 'success');
+    startGame(data.seed);
+});
+
+socket.on('playerLeft', (id) => {
+    logToScreen(`Jugador ${id.substr(0,4)}... ha salido.`, 'warn');
+    if (playersMeshes[id]) {
+        scene.remove(playersMeshes[id]);
+        delete playersMeshes[id];
     }
 });
 
-// ==========================================
-// UI HANDLERS (LOBBY)
-// ==========================================
-const ui = {
-    lobby: document.getElementById('lobby-screen'),
-    mainLobby: document.getElementById('main-lobby'),
-    createPanel: document.getElementById('create-room-panel'),
-    roomList: document.getElementById('room-list'),
-    loading: document.getElementById('loading'),
-    loadingText: document.getElementById('loading-text'),
-    uiLayer: document.getElementById('ui-layer'),
-    
-    // Game UI
-    speedDisplay: document.getElementById('speed-display'),
-    playerCount: document.getElementById('player-count'),
-    menuModal: document.getElementById('menu-modal'),
-    
-    // Host Inputs
-    hostSpeed: document.getElementById('host-speed'),
-    hostAccel: document.getElementById('host-accel'),
-    hostSpeedVal: document.getElementById('host-speed-val'),
-    hostAccelVal: document.getElementById('host-accel-val')
+socket.on('error', (msg) => {
+    logToScreen(`Error Servidor: ${msg}`, 'error');
+    alert(msg);
+});
+
+// UI Functions Globales
+window.enterLobby = () => {
+    if(!state.isConnected) {
+        logToScreen("Intentando conectar...", 'warn');
+        return; 
+    }
+    document.getElementById('intro-panel').style.display = 'none';
+    document.getElementById('lobby-ui').style.display = 'flex';
+    logToScreen("Entrando al Lobby...");
 };
 
-// Navegación Lobby
-document.getElementById('btn-show-create').onclick = () => {
-    ui.mainLobby.style.display = 'none';
-    ui.createPanel.style.display = 'flex';
-};
-document.getElementById('btn-back').onclick = () => {
-    ui.createPanel.style.display = 'none';
-    ui.mainLobby.style.display = 'flex';
-};
-document.getElementById('btn-refresh').onclick = refreshRoomList;
-
-// Host Config Sliders
-ui.hostSpeed.oninput = (e) => ui.hostSpeedVal.innerText = e.target.value + " km/h";
-ui.hostAccel.oninput = (e) => ui.hostAccelVal.innerText = e.target.value + " km/h/s";
-
-// CREAR SALA
-document.getElementById('btn-create-confirm').onclick = async () => {
-    if(!state.user) return;
-    setLoading(true, "Creando servidor...");
-    
-    const roomId = 'room_' + Math.random().toString(36).substr(2, 5);
-    const roomConfig = {
-        hostId: state.user.uid,
-        maxKmh: parseInt(ui.hostSpeed.value),
-        accel: parseInt(ui.hostAccel.value),
-        seed: Math.random() * 99999, // LA SEMILLA DEL MUNDO
-        status: 'active',
-        createdAt: Date.now()
-    };
-
-    // 1. Crear Sala
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId), roomConfig);
-    
-    // 2. Unirse como Host
-    await joinGame(roomId, roomConfig);
+window.createGameRoom = () => {
+    const maxKmh = parseInt(document.getElementById('manual-max-speed').value);
+    const accel = parseInt(document.getElementById('manual-accel').value);
+    logToScreen(`Solicitando crear sala (Max: ${maxKmh}, Acc: ${acc})...`);
+    socket.emit('createRoom', { maxKmh, accel });
 };
 
-async function refreshRoomList() {
-    if(!state.user) return;
-    ui.roomList.innerHTML = '<div style="padding:10px; color:#666;">Cargando...</div>';
-    
-    // Nota: En producción usaríamos queries, aquí traemos todo y filtramos (simple para demo)
-    const snapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'rooms'));
-    ui.roomList.innerHTML = '';
-    
-    if(snapshot.empty) {
-        ui.roomList.innerHTML = '<div style="padding:10px;">No hay salas activas.</div>';
+window.joinGameRoom = () => {
+    const code = document.getElementById('room-code-input').value;
+    if(!code) {
+        logToScreen("Error: Código de sala vacío", 'error');
         return;
     }
-
-    snapshot.forEach(doc => {
-        const data = doc.data();
-        if(data.status === 'active') {
-            const div = document.createElement('div');
-            div.className = 'room-item';
-            div.innerHTML = `<div><strong>Sala ${doc.id}</strong><br><small>Vel: ${data.maxKmh} | Accel: ${data.accel}</small></div><span>UNIRSE ▶</span>`;
-            div.onclick = () => joinGame(doc.id, data);
-            ui.roomList.appendChild(div);
-        }
-    });
-}
-
-async function joinGame(roomId, roomData) {
-    state.roomId = roomId;
-    state.config = roomData; // Aplicar configuración del host (incluyendo SEED)
-    state.isHost = (state.user.uid === roomData.hostId);
-    
-    // Inicializar mundo con la semilla recibida
-    initWorld(state.config.seed);
-    
-    // Registrar jugador
-    const playerRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId, 'players', state.user.uid);
-    await setDoc(playerRef, {
-        color: state.playerColor,
-        x: 0, y: 0, z: 0,
-        rot: 0,
-        active: true
-    });
-
-    // Escuchar a otros jugadores
-    const playersCol = collection(db, 'artifacts', appId, 'public', 'data', 'rooms', roomId, 'players');
-    onSnapshot(playersCol, (snapshot) => {
-        let count = 0;
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            if(doc.id !== state.user.uid && data.active) {
-                updateRemotePlayer(doc.id, data);
-            }
-            count++;
-        });
-        ui.playerCount.innerText = "Online: " + count;
-    });
-
-    setLoading(false);
-    ui.lobby.style.display = 'none';
-    ui.uiLayer.style.display = 'block';
-    animate(); // Iniciar Loop
-}
-
-function updateRemotePlayer(uid, data) {
-    // Si no existe, crear coche fantasma
-    if(!state.remotePlayers[uid]) {
-        const ghostCar = createSportCar(data.color); // Usar color del jugador
-        scene.add(ghostCar);
-        state.remotePlayers[uid] = { mesh: ghostCar };
-    }
-    
-    // Actualizar posición objetivo (Lerp se hace en animate)
-    const p = state.remotePlayers[uid];
-    p.mesh.position.set(data.x, data.y, data.z);
-    p.mesh.rotation.y = data.rot;
-}
-
-function setLoading(show, text="Cargando...") {
-    ui.loading.style.display = show ? 'flex' : 'none';
-    ui.loadingText.innerText = text;
-}
-
-// SALIR
-document.getElementById('btn-exit').onclick = async () => {
-    // Eliminar jugador y recargar
-    if(state.roomId && state.user) {
-        const playerRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', state.roomId, 'players', state.user.uid);
-        await updateDoc(playerRef, { active: false });
-    }
-    location.reload();
+    logToScreen(`Intentando unirse a sala: ${code}...`);
+    socket.emit('joinRoom', code);
 };
 
 // ==========================================
-// SEEDED RANDOM (PARA CARRETERA COMPARTIDA)
+// GAME ENGINE
 // ==========================================
-let seedVal = 1;
-function seededRandom() {
-    var x = Math.sin(seedVal++) * 10000;
-    return x - Math.floor(x);
+let scene, camera, renderer, composer;
+let playersMeshes = {}; // { socketId: Group }
+let myCarMesh = null;
+let lightTarget;
+let lastTimeFPS = 0;
+let frames = 0;
+
+function startGame(seed) {
+    document.getElementById('start-screen').style.display = 'none';
+    document.getElementById('loading').style.display = 'flex';
+    
+    // Init ThreeJS
+    initThreeJS(seed);
+    
+    setTimeout(() => {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('ui-layer').style.display = 'block';
+        state.gameStarted = true;
+        logToScreen("Motor Gráfico Iniciado.");
+        animate();
+    }, 1000);
 }
-// Función wrapper de ruido que usa nuestra seed
-function setSeed(s) { seedVal = s; }
 
-// ==========================================
-// THREE.JS & PHYSICS
-// ==========================================
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x87CEEB, 0.002);
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
-camera.position.set(0, 5, -10);
+// Materiales Compartidos
+const matCarBody = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.1, metalness: 0.5 });
+const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
+const matWheel = new THREE.MeshStandardMaterial({ color: 0x222222 });
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-document.body.appendChild(renderer.domElement);
+function createCarMesh(colorHex) {
+    const grp = new THREE.Group();
+    
+    // Chassis
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2, 0.7, 4.2), matCarBody.clone());
+    body.material.color.set(colorHex);
+    body.position.y = 0.6; body.castShadow = true;
+    grp.add(body);
+    
+    // Outline Chassis
+    const outBody = new THREE.Mesh(new THREE.BoxGeometry(2, 0.7, 4.2), matOutline);
+    outBody.position.y = 0.6; outBody.scale.multiplyScalar(1.03);
+    grp.add(outBody);
 
-const renderScene = new RenderPass(scene, camera);
-const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-bloomPass.threshold = 0.8; bloomPass.strength = 0.15; bloomPass.radius = 0.3;
-const composer = new EffectComposer(renderer);
-composer.addPass(renderScene);
-composer.addPass(bloomPass);
+    // Cabin
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 2.0), new THREE.MeshStandardMaterial({color:0x111}));
+    cabin.position.set(0, 1.2, -0.2);
+    grp.add(cabin);
+    const outCabin = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 2.0), matOutline);
+    outCabin.position.set(0, 1.2, -0.2); outCabin.scale.multiplyScalar(1.03);
+    grp.add(outCabin);
 
-// Luces y Entorno
-const ambientLight = new THREE.AmbientLight(0x404040, 2.0); scene.add(ambientLight);
-const sunLight = new THREE.DirectionalLight(0xffdf80, 2.5);
-sunLight.castShadow = true; 
-sunLight.shadow.camera.left = -300; sunLight.shadow.camera.right = 300; sunLight.shadow.camera.top = 300; sunLight.shadow.camera.bottom = -300; sunLight.shadow.camera.far = 600;
-scene.add(sunLight);
-const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(500, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00, fog: false })); scene.add(sunMesh);
-const moonLight = new THREE.DirectionalLight(0x88ccff, 3.0); scene.add(moonLight);
-const moonMesh = new THREE.Mesh(new THREE.SphereGeometry(500, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false })); scene.add(moonMesh);
+    // Wheels (Simple visual)
+    const wGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16); wGeo.rotateZ(Math.PI/2);
+    const posW = [{x:1,z:1.2}, {x:-1,z:1.2}, {x:1,z:-1.2}, {x:-1,z:-1.2}];
+    posW.forEach(p => {
+        const w = new THREE.Mesh(wGeo, matWheel);
+        w.position.set(p.x, 0.4, p.z);
+        grp.add(w);
+    });
 
-// Generación Procedural
-const chunks = [];
-let genPoint = new THREE.Vector3(0, 4, 0); let genAngle = 0; let totalGenDist = 0;
-
-// Noise Function con Seed
-const perm = new Uint8Array(512); 
-function initNoise(seed) {
-    setSeed(seed);
-    const p = new Uint8Array(256);
-    for(let i=0; i<256; i++) p[i] = Math.floor(seededRandom()*256);
-    for(let i=0; i<512; i++) perm[i] = p[i & 255];
+    return grp;
 }
-const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
-const lerp = (t, a, b) => a + t * (b - a);
-const grad = (hash, x, y, z) => { const h = hash & 15; const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z; return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v); };
-const noise = (x, y) => { const X = Math.floor(x) & 255, Y = Math.floor(y) & 255; x -= Math.floor(x); y -= Math.floor(y); const u = fade(x), v = fade(y); const A = perm[X] + Y, B = perm[X + 1] + Y; return lerp(v, lerp(u, grad(perm[A], x, y, 0), grad(perm[B], x - 1, y, 0)), lerp(u, grad(perm[A + 1], x, y - 1, 0), grad(perm[B + 1], x - 1, y - 1, 0)), lerp(u, grad(perm[A + 1], x, y - 1, 0), grad(perm[B + 1], x - 1, y - 1, 0))); };
-function getTerrainHeight(x, z) { return noise(x*0.012, z*0.012)*30 + noise(x*0.04, z*0.04)*6; }
 
-// Clases y Funciones de Construcción (Adaptadas para usar seededRandom)
-const matRoad = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8, metalness: 0.05, side: THREE.DoubleSide }); 
-const matWall = new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
-const matLine = new THREE.MeshBasicMaterial({ color: 0xffff00 }); 
-const matLineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
-const matGrass = new THREE.MeshStandardMaterial({vertexColors:true, flatShading:true});
-const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.4, metalness: 0.1, flatShading: true });
+function initThreeJS(seed) {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x050510, 0.002);
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 5000);
+    
+    renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    document.body.appendChild(renderer.domElement);
 
-class Chunk {
-    constructor(index, startPoint, startAngle, startDistGlobal) {
-        this.index = index; this.startDistGlobal = startDistGlobal; this.group = new THREE.Group(); scene.add(this.group);
-        const angleChange = (seededRandom() - 0.5) * 0.5; const endAngle = startAngle + angleChange;
-        const p0 = startPoint;
-        const endX = Math.cos(endAngle) * 100 + p0.x; const endZ = Math.sin(endAngle) * 100 + p0.z;
-        const terrainH = getTerrainHeight(endX, endZ);
-        let targetY = (terrainH < 1) ? Math.max(p0.y, 3) : terrainH + 2.0; targetY = THREE.MathUtils.clamp(targetY, p0.y - 6.0, p0.y + 6.0);
-        const p3 = new THREE.Vector3(endX, targetY, endZ);
-        const cp1 = new THREE.Vector3(Math.cos(startAngle)*50, 0, Math.sin(startAngle)*50).add(p0);
-        const cp2 = new THREE.Vector3(Math.cos(endAngle)*-50, 0, Math.sin(endAngle)*-50).add(p3);
-        this.curve = new THREE.CubicBezierCurve3(p0, cp1, cp2, p3);
-        this.length = this.curve.getLength(); this.endDistGlobal = startDistGlobal + this.length;
-        this.endPoint = p3; this.endAngle = endAngle;
-        this.buildRoadAndWalls(); this.buildTerrain(); 
-    }
-    buildRoadAndWalls() {
-        const div = 40; const pts = this.curve.getSpacedPoints(div); const frames = this.curve.computeFrenetFrames(div, false);
-        const rV=[],rN=[],rI=[], wV=[],wN=[],wI=[], lV=[],lN=[],lI=[];
-        for(let i=0; i<=div; i++) {
-            const p=pts[i], n=frames.binormals[i], up=frames.normals[i];
-            rV.push(p.x+n.x*ROAD_WIDTH_HALF, p.y+ROAD_Y_OFFSET, p.z+n.z*ROAD_WIDTH_HALF, p.x-n.x*ROAD_WIDTH_HALF, p.y+ROAD_Y_OFFSET, p.z-n.z*ROAD_WIDTH_HALF);
-            rN.push(up.x, up.y, up.z, up.x, up.y, up.z);
-            // Walls (Simplificado)
-            const LO=p.clone().add(n.clone().multiplyScalar(ROAD_WIDTH_HALF+WALL_WIDTH)), RO=p.clone().add(n.clone().multiplyScalar(-(ROAD_WIDTH_HALF+WALL_WIDTH)));
-            const LI=p.clone().add(n.clone().multiplyScalar(ROAD_WIDTH_HALF)), RI=p.clone().add(n.clone().multiplyScalar(-ROAD_WIDTH_HALF));
-            const yT=p.y+ROAD_Y_OFFSET+WALL_HEIGHT, yB=p.y+ROAD_Y_OFFSET-1;
-            wV.push(LI.x,yT,LI.z, LI.x,yB,LI.z, LO.x,yT,LO.z, LO.x,yB,LO.z, RI.x,yT,RI.z, RI.x,yB,RI.z, RO.x,yT,RO.z, RO.x,yB,RO.z);
-            wN.push(0,1,0,0,1,0,0,1,0,0,1,0, 0,1,0,0,1,0,0,1,0,0,1,0);
-            // Linea
-            lV.push(p.x+n.x*0.15, p.y+ROAD_Y_OFFSET+0.08, p.z+n.z*0.15, p.x-n.x*0.15, p.y+ROAD_Y_OFFSET+0.08, p.z-n.z*0.15);
-            lN.push(0,1,0,0,1,0);
-        }
-        for(let i=0; i<div; i++) {
-            const b=i*2; rI.push(b,b+2,b+1, b+1,b+2,b+3);
-            if(i%2===0) lI.push(b,b+2,b+1, b+1,b+2,b+3);
-            const w=i*8; 
-            wI.push(w,w+8,w+1, w+1,w+8,w+9, w,w+2,w+8, w+2,w+10,w+8, w+2,w+3,w+10, w+3,w+11,w+10); // Left
-            wI.push(w+4,w+5,w+12, w+5,w+13,w+12, w+6,w+4,w+14, w+4,w+12,w+14, w+7,w+6,w+15, w+6,w+14,w+15); // Right
-        }
-        const rM=new THREE.Mesh(new THREE.BufferGeometry(), matRoad); rM.geometry.setAttribute('position',new THREE.Float32BufferAttribute(rV,3)); rM.geometry.setAttribute('normal',new THREE.Float32BufferAttribute(rN,3)); rM.geometry.setIndex(rI); rM.receiveShadow=true; this.group.add(rM);
-        const wM=new THREE.Mesh(new THREE.BufferGeometry(), matWall); wM.geometry.setAttribute('position',new THREE.Float32BufferAttribute(wV,3)); wM.geometry.setAttribute('normal',new THREE.Float32BufferAttribute(wN,3)); wM.geometry.setIndex(wI); wM.geometry.computeVertexNormals(); wM.castShadow=true; this.group.add(wM);
-        const lM=new THREE.Mesh(new THREE.BufferGeometry(), matLineWhite); lM.geometry.setAttribute('position',new THREE.Float32BufferAttribute(lV,3)); lM.geometry.setAttribute('normal',new THREE.Float32BufferAttribute(lN,3)); lM.geometry.setIndex(lI); this.group.add(lM);
-    }
-    buildTerrain() {
-        const divL=30, divW=60, w=800, vs=[], cs=[], is=[], cObj=new THREE.Color();
-        const pts=this.curve.getSpacedPoints(divL), frames=this.curve.computeFrenetFrames(divL, false);
-        for(let i=0; i<=divL; i++) {
-            const P=pts[i], N=frames.binormals[i];
-            for(let j=0; j<=divW; j++) {
-                const u=(j/divW)-0.5, xOff=u*w, px=P.x+N.x*xOff, pz=P.z+N.z*xOff;
-                let py=getTerrainHeight(px, pz); const dist=Math.abs(xOff);
-                if(dist<ROAD_WIDTH_HALF+2) { if(py>P.y-2) py=P.y-2; } else if(dist<ROAD_WIDTH_HALF+15) { let t=py; if(py>P.y-2) t=P.y-2; py=lerp(1-(dist-(ROAD_WIDTH_HALF+2))/13, py, t); }
-                vs.push(px, py, pz);
-                if(py<-1) cObj.setHex(0xe6c288); else if(py<5) cObj.setHex(0x558b2f); else if(py<22) cObj.setHex(0x4e342e); else cObj.setHex(0xffffff);
-                cs.push(cObj.r, cObj.g, cObj.b);
+    const renderScene = new RenderPass(scene, camera);
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0.8; bloomPass.strength = 0.15; bloomPass.radius = 0.3;
+    composer = new EffectComposer(renderer);
+    composer.addPass(renderScene);
+    composer.addPass(bloomPass);
+
+    // Luces
+    const amb = new THREE.AmbientLight(0x404040, 2.0); scene.add(amb);
+    const sun = new THREE.DirectionalLight(0xffdf80, 2.5);
+    sun.position.set(100, 300, 100); sun.castShadow = true;
+    scene.add(sun);
+    lightTarget = new THREE.Object3D(); scene.add(lightTarget); sun.target = lightTarget;
+
+    // Generar Suelo Infinito (Visual simple para demo)
+    // En versión final aquí se generaría el Spline basado en el seed compartido
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(20000, 20000), new THREE.MeshStandardMaterial({color:0x222222, roughness:0.8}));
+    plane.rotation.x = -Math.PI/2;
+    plane.receiveShadow = true;
+    scene.add(plane);
+    
+    // Grid Helper para referencia de movimiento
+    const grid = new THREE.GridHelper(20000, 200, 0x444444, 0x222222);
+    scene.add(grid);
+}
+
+// UPDATE FROM SERVER
+// Recibimos estado autoritativo cada frame (aprox 60hz)
+socket.on('gameState', (playersData) => {
+    if (!state.gameStarted) return;
+
+    playersData.forEach(pData => {
+        let mesh = playersMeshes[pData.id];
+        
+        // Instanciar nuevo jugador
+        if (!mesh) {
+            mesh = createCarMesh(pData.color);
+            scene.add(mesh);
+            playersMeshes[pData.id] = mesh;
+            logToScreen(`Jugador detectado: ${pData.id.substr(0,4)}`, 'info');
+            
+            if (pData.id === socket.id) {
+                myCarMesh = mesh;
+                // Adjuntar luz al coche propio
+                const light = new THREE.SpotLight(0xffffff, 400, 300, 0.6);
+                light.position.set(0, 2, 0);
+                light.target.position.set(0, 0, 20);
+                mesh.add(light);
+                mesh.add(light.target);
             }
         }
-        for(let i=0; i<divL; i++) for(let j=0; j<divW; j++) { const a=i*(divW+1)+j, b=(i+1)*(divW+1)+j, c=(i+1)*(divW+1)+j+1, d=i*(divW+1)+j+1; is.push(a,b,d, b,c,d); }
-        const m=new THREE.Mesh(new THREE.BufferGeometry(), matGrass); m.geometry.setAttribute('position',new THREE.Float32BufferAttribute(vs,3)); m.geometry.setAttribute('color',new THREE.Float32BufferAttribute(cs,3)); m.geometry.setIndex(is); m.geometry.computeVertexNormals(); m.receiveShadow=true; this.group.add(m);
-        const wm=new THREE.Mesh(new THREE.PlaneGeometry(w, 100), matWater); wm.rotateX(-Math.PI/2); wm.position.set(this.curve.getPointAt(0.5).x, -2, this.curve.getPointAt(0.5).z); this.group.add(wm);
-    }
-    dispose() { scene.remove(this.group); this.group.traverse(o=>{if(o.geometry)o.geometry.dispose();}); }
-}
 
-function initWorld(seed) {
-    initNoise(seed);
-    genPoint.set(0,4,0); genAngle=0; totalGenDist=0;
-    // Limpiar anterior si existe
-    chunks.forEach(c => c.dispose()); chunks.length=0;
-    for(let i=0; i<14; i++) spawnChunk();
+        // Interpolación visual básica
+        // Nota: En prod usaríamos buffer de interpolación para suavidad extrema.
+        // Aquí aplicamos posición directa. 
+        // HOTFIX: El servidor envía 'dist' (Z) y 'lat' (X) relativos a la curva.
+        // Para visualización correcta en cliente, DEBEMOS calcular la curva.
+        // Como simplificación visual para esta demo, trataremos el mundo como plano infinito donde:
+        // Z = Progreso, X = Lateral.
+        
+        // Simular curva visualmente (client-side visual fix)
+        // Usamos la misma formula que el server "getTrackCurvePoint" pero para dibujar
+        // x = lateral, z = dist. 
+        // Pero queremos ver el coche en coordenadas 3D mundiales.
+        // Si el server calcula posición física proyectada, aquí la pintamos.
+        // Como el server en V20 envía dist/lat, necesitamos convertir a WorldPos.
+        // Usaremos una aproximación visual simple:
+        
+        // WorldX = pData.lat;
+        // WorldZ = pData.dist;
+        // (Esto hará una carretera recta infinita visualmente, funcional para test de física)
+        
+        mesh.position.set(pData.lat, 0.6, pData.dist);
+        
+        // Rotación: El servidor envía WorldHeading.
+        mesh.rotation.y = pData.heading;
+    });
+
+    // Update HUD & Camara (Solo para mi coche)
+    const myData = playersData.find(p => p.id === socket.id);
+    if(myData && myCarMesh) {
+        document.getElementById('speed-val').innerText = Math.floor(myData.speed * 100);
+        
+        // Cámara TPS
+        const camDist = 18 * state.cameraZoom;
+        const camHeight = 8 * state.cameraZoom;
+        
+        // Calcular posición detrás del coche basado en su heading
+        const backX = -Math.sin(myData.heading) * camDist;
+        const backZ = -Math.cos(myData.heading) * camDist;
+        
+        const targetCamPos = new THREE.Vector3(
+            myCarMesh.position.x + backX,
+            myCarMesh.position.y + camHeight,
+            myCarMesh.position.z + backZ
+        );
+        
+        camera.position.lerp(targetCamPos, 0.1);
+        camera.lookAt(myCarMesh.position);
+        
+        lightTarget.position.copy(myCarMesh.position);
+    }
+});
+
+// INPUT LOOP
+function sendInput() {
+    if(!state.gameStarted) return;
     
-    // Crear Coche Propio
-    createSportCar(state.playerColor).then(car => {
-        mainCar = car;
-        scene.add(mainCar);
+    // Procesar inversión de dirección aquí antes de enviar
+    let processedSteer = state.input.steer;
+    if(state.steeringInverted) processedSteer *= -1;
+    
+    // Aplicar sensibilidad localmente? No, el servidor es autoritativo.
+    // Enviamos el raw input (-1 a 1) y el servidor decide.
+    // Pero si queremos que el slider de "Sensibilidad" del cliente funcione,
+    // debemos escalar el input aquí.
+    
+    // Scaling input by sensitivity setting (10% to 150%)
+    // Base 1.0 (100%). 
+    processedSteer *= (state.steerSensitivity / 100.0);
+    
+    socket.emit('playerInput', { 
+        steer: processedSteer, 
+        gas: state.input.gas, 
+        brake: state.input.brake 
     });
 }
 
-function spawnChunk() {
-    const idx = chunks.length>0 ? chunks[chunks.length-1].index+1 : 0;
-    const c = new Chunk(idx, genPoint, genAngle, totalGenDist);
-    chunks.push(c);
-    genPoint = c.endPoint; genAngle = c.endAngle; totalGenDist += c.length;
-}
+// Input Handlers
+const joystickZone = document.getElementById('joystick-zone');
+const joystickKnob = document.getElementById('joystick-knob');
+let joyId = null; const joyCenter={x:0,y:0};
 
-function getTrackData(dist) {
-    for(let c of chunks) {
-        if(dist >= c.startDistGlobal && dist < c.endDistGlobal) {
-            const t = (dist - c.startDistGlobal) / c.length;
-            const pos = c.curve.getPointAt(t);
-            const tangent = c.curve.getTangentAt(t).normalize();
-            const right = new THREE.Vector3().crossVectors(tangent, new THREE.Vector3(0,1,0)).normalize();
-            return { pos, tangent, right };
-        }
+function handleJoy(cx, cy, start) {
+    if(start) {
+        const r = joystickZone.getBoundingClientRect();
+        joyCenter.x = r.left + r.width/2;
     }
-    return null;
-}
-
-// COCHE
-let mainCar;
-const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
-async function createSportCar(colorHex) {
-    const car = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorHex), roughness: 0.1, metalness: 0.5 });
-    const blackMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.3 });
-    
-    // Body
-    const chG = new THREE.BoxGeometry(2.0, 0.7, 4.2);
-    const chassis = new THREE.Mesh(chG, bodyMat); chassis.position.y=0.6; chassis.castShadow=true; car.add(chassis);
-    
-    // Cabin
-    const cbG = new THREE.BoxGeometry(1.6, 0.5, 2.0);
-    const cabin = new THREE.Mesh(cbG, blackMat); cabin.position.set(0, 1.2, -0.2); car.add(cabin);
-    
-    // Wheels
-    const wG = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16).rotateZ(Math.PI/2);
-    const wM = new THREE.MeshStandardMaterial({color:0x222});
-    [{x:1,z:1.2},{x:-1,z:1.2},{x:1,z:-1.2},{x:-1,z:-1.2}].forEach(p => {
-        const w = new THREE.Mesh(wG, wM); w.position.set(p.x, 0.4, p.z); car.add(w);
-    });
-
-    // Outline (Cell Shading)
-    const outCh = new THREE.Mesh(chG, matOutline); outCh.scale.multiplyScalar(1.03); outCh.position.y=0.6; car.add(outCh);
-    const outCb = new THREE.Mesh(cbG, matOutline); outCb.scale.multiplyScalar(1.03); outCb.position.set(0,1.2,-0.2); car.add(outCb);
-
-    // Luces (Solo si es mi coche, para no saturar)
-    if(colorHex === state.playerColor) {
-        const hl = new THREE.SpotLight(0xffffff, 400, 300, 0.6, 0.5, 1);
-        hl.position.set(0, 1.0, 1.5); hl.target.position.set(0,0,10);
-        car.add(hl); car.add(hl.target);
-    }
-    
-    return car;
-}
-
-// INPUTS
-document.getElementById('gas-btn').addEventListener('touchstart', (e)=>{ e.preventDefault(); state.inputGas=true; });
-document.getElementById('gas-btn').addEventListener('touchend', (e)=>{ e.preventDefault(); state.inputGas=false; });
-document.getElementById('gas-btn').addEventListener('mousedown', (e)=>{ state.inputGas=true; });
-document.getElementById('gas-btn').addEventListener('mouseup', (e)=>{ state.inputGas=false; });
-
-document.getElementById('brake-btn').addEventListener('touchstart', (e)=>{ e.preventDefault(); state.inputBrake=true; });
-document.getElementById('brake-btn').addEventListener('touchend', (e)=>{ e.preventDefault(); state.inputBrake=false; });
-document.getElementById('brake-btn').addEventListener('mousedown', (e)=>{ state.inputBrake=true; });
-document.getElementById('brake-btn').addEventListener('mouseup', (e)=>{ state.inputBrake=false; });
-
-const joyZone = document.getElementById('joystick-zone');
-const joyKnob = document.getElementById('joystick-knob');
-let joyTouchId = null; const joyCenter = {x:0, y:0};
-
-joyZone.addEventListener('touchstart', (e)=>{
-    e.preventDefault();
-    const t = e.changedTouches[0];
-    joyTouchId = t.identifier;
-    const r = joyZone.getBoundingClientRect();
-    joyCenter.x = r.left + r.width/2;
-    updateJoy(t.clientX);
-});
-joyZone.addEventListener('touchmove', (e)=>{
-    e.preventDefault();
-    if(joyTouchId===null) return;
-    const t = [...e.changedTouches].find(x=>x.identifier===joyTouchId);
-    if(t) updateJoy(t.clientX);
-});
-joyZone.addEventListener('touchend', (e)=>{
-    e.preventDefault(); joyTouchId=null; state.inputSteer=0; joyKnob.style.transform=`translate(-50%,-50%)`;
-});
-// Mouse fallback
-joyZone.addEventListener('mousedown', (e)=>{
-    joyTouchId='mouse'; 
-    const r = joyZone.getBoundingClientRect();
-    joyCenter.x = r.left + r.width/2;
-    updateJoy(e.clientX);
-});
-window.addEventListener('mousemove', (e)=>{ if(joyTouchId==='mouse') updateJoy(e.clientX); });
-window.addEventListener('mouseup', (e)=>{ if(joyTouchId==='mouse') { joyTouchId=null; state.inputSteer=0; joyKnob.style.transform=`translate(-50%,-50%)`; }});
-
-function updateJoy(cx) {
     let dx = cx - joyCenter.x;
     if(dx > 50) dx = 50; if(dx < -50) dx = -50;
-    joyKnob.style.transform = `translate(calc(-50% + ${dx}px), -50%)`;
-    state.inputSteer = dx / 50;
+    
+    joystickKnob.style.transform = `translate(calc(-50% + ${dx}px), -50%)`;
+    state.input.steer = dx / 50; // -1 a 1
+    sendInput();
 }
 
-// CONTROLES DE MENÚ
-document.getElementById('menu-btn').onclick = () => {
-    state.menuOpen = !state.menuOpen;
-    ui.menuModal.style.display = state.menuOpen ? 'flex' : 'none';
-};
-document.getElementById('chk-invert-steering').onchange = (e) => state.steeringInverted = e.target.checked;
-document.getElementById('steer-sens').oninput = (e) => state.steerSensitivity = parseInt(e.target.value);
+joystickZone.addEventListener('touchstart', (e)=>{ e.preventDefault(); joyId=e.changedTouches[0].identifier; handleJoy(e.changedTouches[0].clientX, 0, true); });
+joystickZone.addEventListener('touchmove', (e)=>{ e.preventDefault(); const t=[...e.changedTouches].find(k=>k.identifier===joyId); if(t) handleJoy(t.clientX, 0, false); });
+joystickZone.addEventListener('touchend', (e)=>{ e.preventDefault(); joyId=null; state.input.steer=0; joystickKnob.style.transform=`translate(-50%,-50%)`; sendInput(); });
+// Mouse support for debug
+joystickZone.addEventListener('mousedown', (e)=>{ joyId='mouse'; handleJoy(e.clientX, 0, true); });
+window.addEventListener('mousemove', (e)=>{ if(joyId==='mouse') handleJoy(e.clientX, 0, false); });
+window.addEventListener('mouseup', (e)=>{ if(joyId==='mouse') { joyId=null; state.input.steer=0; joystickKnob.style.transform=`translate(-50%,-50%)`; sendInput(); } });
 
-// GAME LOOP
+// Pedales
+const btnGas = document.getElementById('gas-btn');
+const btnBrake = document.getElementById('brake-btn');
+const setPedal = (k,v) => { state.input[k]=v; sendInput(); };
+
+btnGas.addEventListener('mousedown', ()=>setPedal('gas',true)); window.addEventListener('mouseup', ()=>setPedal('gas',false));
+btnGas.addEventListener('touchstart', (e)=>{e.preventDefault();setPedal('gas',true)}); btnGas.addEventListener('touchend', (e)=>{e.preventDefault();setPedal('gas',false)});
+
+btnBrake.addEventListener('mousedown', ()=>setPedal('brake',true)); // Brake release handled by global mouseup above if needed, but safer individually
+btnBrake.addEventListener('mouseup', ()=>setPedal('brake',false));
+btnBrake.addEventListener('touchstart', (e)=>{e.preventDefault();setPedal('brake',true)}); btnBrake.addEventListener('touchend', (e)=>{e.preventDefault();setPedal('brake',false)});
+
+// Config listeners
+document.getElementById('chk-invert-steering').addEventListener('change', (e)=> state.steeringInverted = e.target.checked);
+document.getElementById('chk-show-brake').addEventListener('change', (e)=> {
+    state.showBrake = e.target.checked;
+    document.getElementById('brake-btn').style.display = state.showBrake ? 'flex' : 'none';
+});
+document.getElementById('steer-sens').addEventListener('input', (e)=> { state.steerSensitivity = parseInt(e.target.value); document.getElementById('disp-sens').innerText = state.steerSensitivity+"%"; });
+
 function animate() {
     requestAnimationFrame(animate);
-    if(!mainCar) return;
-
-    // --- PHYSICS ---
-    // Usar la config del HOST (state.config)
-    const MAX_SPEED_INTERNAL = state.config.maxKmh / 100.0;
-    const ACCEL_INTERNAL = (state.config.accel / 100.0) / 60.0;
-
-    // Aceleración
-    if(state.inputGas) {
-        if(state.manualSpeed < MAX_SPEED_INTERNAL) state.manualSpeed += ACCEL_INTERNAL;
-    } else if(state.inputBrake) {
-        state.manualSpeed -= ACCEL_INTERNAL * 2;
-    } else {
-        state.manualSpeed *= 0.99;
-    }
-    if(state.manualSpeed < 0) state.manualSpeed = 0;
-
-    // Dirección
-    const sens = 0.02 + (state.steerSensitivity/100.0)*0.13;
-    const stiffness = 2.0; // Fixed stiffness for stability
-    const turnRate = sens / (1.0 + (state.manualSpeed * stiffness));
-    let dir = state.inputSteer;
-    if(state.steeringInverted) dir *= -1;
-    state.worldHeading += dir * turnRate;
-
-    // Movimiento
-    const track = getTrackData(state.trackDist);
-    let currentY = 0.8;
-    if(track) {
-        const moveX = Math.sin(state.worldHeading) * state.manualSpeed;
-        const moveZ = Math.cos(state.worldHeading) * state.manualSpeed;
-        const moveVec = new THREE.Vector3(moveX, 0, moveZ);
+    if(state.gameStarted) {
+        // Enviar inputs continuamente? No, solo por evento. 
+        // Pero podríamos enviar heartbeat aquí si fuera UDP.
+        // En TCP/SocketIO mejor por eventos para no saturar.
         
-        state.trackDist += moveVec.dot(track.tangent);
-        state.lateralOffset += moveVec.dot(track.right);
-
-        // Rebote
-        if(Math.abs(state.lateralOffset) > WALL_LIMIT) {
-            const roadAngle = Math.atan2(track.tangent.x, track.tangent.z);
-            let relA = state.worldHeading - roadAngle;
-            while(relA > Math.PI) relA -= Math.PI*2;
-            while(relA < -Math.PI) relA += Math.PI*2;
-            state.worldHeading = roadAngle + (-relA * 0.3);
-            state.lateralOffset = Math.sign(state.lateralOffset) * (WALL_LIMIT - 0.1);
-            state.manualSpeed *= 0.8;
+        composer.render();
+        
+        // FPS Counter
+        const now = performance.now();
+        frames++;
+        if(now - lastTimeFPS >= 1000) { 
+            document.getElementById('fps-counter').innerText = "FPS: " + frames; 
+            frames=0; lastTimeFPS=now; 
         }
-        
-        // Render Pos
-        const pos = track.pos.clone().add(track.right.clone().multiplyScalar(state.lateralOffset));
-        pos.y += ROAD_Y_OFFSET + 0.05;
-        currentY = pos.y;
-        mainCar.position.copy(pos);
-        mainCar.rotation.set(0, state.worldHeading, 0);
-        
-        // Camera
-        const back = new THREE.Vector3(-Math.sin(state.worldHeading), 0, -Math.cos(state.worldHeading));
-        const camPos = pos.clone().add(back.multiplyScalar(18 * state.cameraZoom));
-        camPos.y += 8 * state.cameraZoom;
-        camera.position.lerp(camPos, 0.1);
-        camera.lookAt(pos);
     }
-
-    // --- UPLOAD STATE (Throttled) ---
-    const now = Date.now();
-    if(now - state.lastUpload > 100) { // 10 updates per sec
-        if(state.roomId && state.user) {
-            updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'rooms', state.roomId, 'players', state.user.uid), {
-                x: mainCar.position.x,
-                y: mainCar.position.y,
-                z: mainCar.position.z,
-                rot: state.worldHeading
-            }).catch(()=>{}); // Ignore errors on exit
-        }
-        state.lastUpload = now;
-    }
-
-    // UI Updates
-    ui.speedDisplay.innerText = Math.floor(state.manualSpeed * 100);
-    
-    // Chunk Mgmt
-    if(state.trackDist > chunks[chunks.length-1].startDistGlobal - 400) spawnChunk();
-    if(chunks.length > 0 && state.trackDist > chunks[0].endDistGlobal + 400) chunks.shift().dispose();
-
-    // Environment
-    const time = (Date.now() % 60000) / 60000; 
-    const ang = time * Math.PI * 2;
-    const sin = Math.sin(ang);
-    const lx=mainCar.position.x, lz=mainCar.position.z;
-    sunLight.position.set(lx + Math.cos(ang)*3000, sin*3000, lz + Math.sin(ang)*400);
-    sunMesh.position.copy(sunLight.position);
-    moonLight.position.set(lx - Math.cos(ang)*3000, -sin*3000, lz - Math.sin(ang)*400);
-    moonMesh.position.copy(moonLight.position);
-    starField.position.set(lx, 0, lz);
-
-    if(sin > 0) {
-        sunLight.intensity = sin * 2.0; moonLight.intensity = 0;
-        ambientLight.intensity = 2.0 + sin;
-        const col = new THREE.Color(0x87CEEB);
-        if(sin < 0.2) col.lerp(new THREE.Color(0xff8c00), 1 - (sin/0.2));
-        scene.background = col; scene.fog.color = col;
-        starsMat.opacity = 0;
-    } else {
-        sunLight.intensity = 0; moonLight.intensity = Math.abs(sin) * 3.0;
-        ambientLight.intensity = 2.0;
-        const col = new THREE.Color(0x1a1a2e);
-        scene.background = col; scene.fog.color = col;
-        starsMat.opacity = Math.abs(sin);
-    }
-
-    composer.render();
 }
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight);
+});
