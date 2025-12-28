@@ -3,106 +3,80 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-    <title>Ultimate Racing Online v2.4</title>
+    <title>Photonik Racer Online</title>
     <link rel="stylesheet" href="style.css">
     
-    <!-- SISTEMA DE DIAGNÓSTICO -->
-    <script>
-        window.onerror = function(msg, url, line) {
-            const errBox = document.getElementById('critical-error');
-            if(errBox) {
-                errBox.style.display = 'block';
-                errBox.innerHTML += `<p>❌ ${msg} <br><small>${url}:${line}</small></p>`;
-            }
-            return false;
-        };
-    </script>
-    
-    <!-- Carga Socket.io -->
+    <!-- Carga Socket.IO -->
     <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
 
-<!-- PANTALLA ERROR CRÍTICO -->
-<div id="critical-error" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(50,0,0,0.95); color:white; z-index:9999; padding:20px; font-family:monospace;">
-    <h2 style="color:red; border-bottom:1px solid red;">ERROR DE SISTEMA</h2>
-    <p>Si ves esto, algo ha fallado al cargar. Asegúrate de ejecutar "node server.js" y abrir "localhost:3000".</p>
-</div>
-
-<!-- CONSOLA (F12 Visual) -->
+<!-- CONSOLA DEBUG (F12 Visual) -->
 <div id="debug-console-container">
-    <div id="console-header">STATUS LOG <span id="toggle-console">_</span></div>
+    <div id="console-header">SYSTEM LOG <span id="toggle-console">_</span></div>
     <div id="console-body"></div>
 </div>
 
 <!-- LOBBY & MENU -->
 <div id="start-screen">
-    <!-- FASE 1: Conexión -->
     <div id="intro-panel">
-        <h1>ULTIMATE ONLINE</h1>
-        <p>Cliente v2.4 - Esperando Servidor...</p>
-        <button id="btn-connect" class="big-btn">CONECTAR</button>
+        <h1>PHOTONIK</h1>
+        <p>Online Multiplayer v2.0</p>
+        <button id="btn-connect" class="big-btn">CONECTAR A SERVIDOR</button>
         <div id="connection-status" style="margin-top:10px; color:#666; font-size:12px;">Desconectado</div>
     </div>
 
-    <!-- FASE 2: Selección de Sala -->
+    <!-- Panel Lobby -->
     <div id="lobby-ui" style="display:none;">
-        <h2>LOBBY</h2>
+        <h2>SALA DE ESPERA</h2>
         
         <div class="panel-section">
-            <button id="btn-create-room" class="action-btn">CREAR SALA</button>
+            <button id="btn-create-room" class="action-btn">CREAR NUEVA PARTIDA</button>
         </div>
 
         <div class="separator"></div>
 
         <div class="panel-section">
-            <input type="text" id="room-code-input" placeholder="CÓDIGO..." class="code-input">
-            <button id="btn-refresh" class="secondary-btn">↻ RECAGAR</button>
+            <input type="text" id="room-code-input" placeholder="CÓDIGO DE SALA" class="code-input">
+            <button id="btn-refresh" class="secondary-btn">↻ REFRESCAR</button>
         </div>
 
         <div id="room-list-container">
-            <div style="padding:10px; color:#888;">Buscando salas...</div>
+            <div style="padding:10px; color:#888;">Buscando partidas activas...</div>
         </div>
     </div>
 </div>
 
-<!-- JUEGO -->
+<!-- CARGA -->
 <div id="loading"><span class="loader"></span></div>
 
+<!-- HUD -->
 <div id="ui-layer">
-    <div id="fps-counter">FPS: 60</div>
-    <div id="menu-btn">☰</div>
+    <div id="hud-speed"><span id="speed-val">0</span><small> KM/H</small></div>
     
-    <div id="menu-modal">
-        <div class="menu-item"><span>Mostrar FPS</span><label class="switch"><input type="checkbox" id="chk-fps" checked><span class="slider-switch"></span></label></div>
-        <div class="menu-item"><span>Slider Auto</span><label class="switch"><input type="checkbox" id="chk-slider" checked><span class="slider-switch"></span></label></div>
-        
-        <div class="title-sep">CONFIG SALA</div>
-        <div class="menu-item"><span>Vel. Máx: <b id="disp-max">500</b></span><input type="range" id="manual-max-speed" min="120" max="999" value="500"></div>
-        <div class="menu-item"><span>Acel.: <b id="disp-acc">+40</b></span><input type="range" id="manual-accel" min="15" max="99" value="40"></div>
-
-        <div class="title-sep">CONTROLES</div>
-        <div class="menu-item"><span>Invertir</span><label class="switch"><input type="checkbox" id="chk-invert"><span class="slider-switch"></span></label></div>
-        <div class="menu-item"><span>Ver Freno</span><label class="switch"><input type="checkbox" id="chk-brake" checked><span class="slider-switch"></span></label></div>
-        
-        <div class="title-sep">MODO</div>
-        <div class="menu-item"><span>ONLINE</span><label class="switch"><input type="checkbox" checked disabled><span class="slider-switch" style="opacity:0.5"></span></label></div>
-    </div>
-
-    <div id="auto-controls">
-        <label>CRUCERO</label><input type="range" id="speedSlider" min="0" max="1000" value="100">
-    </div>
-
     <div id="manual-controls">
-        <div id="hud-speed"><span id="speed-val">0</span><small> KM/H</small></div>
         <div id="joystick-zone"><div id="joystick-knob"></div></div>
         <div id="brake-btn" class="pedal">🛑</div>
         <div id="gas-btn" class="pedal">⚡</div>
     </div>
+    
+    <div id="menu-btn">⚙️</div>
+    
+    <!-- Modal Configuración -->
+    <div id="menu-modal" style="display:none;">
+        <div class="menu-item"><span>Vel. Máx Sala</span><span id="disp-max" class="val-display">--</span></div>
+        <div class="menu-item"><span>Acel. Sala</span><span id="disp-acc" class="val-display">--</span></div>
+        
+        <div class="title-sep">MIS CONTROLES</div>
+        <div class="menu-item"><span>Invertir Giro</span><label class="switch"><input type="checkbox" id="chk-invert"><span class="slider-switch"></span></label></div>
+        <div class="menu-item"><span>Ver Freno</span><label class="switch"><input type="checkbox" id="chk-brake" checked><span class="slider-switch"></span></label></div>
+        
+        <div class="title-sep">CONFIG PARTIDA (ADMIN)</div>
+        <div class="menu-item"><span>Set Max Speed</span><input type="range" id="cfg-max" min="120" max="999" value="500"></div>
+        <div class="menu-item"><span>Set Accel</span><input type="range" id="cfg-acc" min="15" max="99" value="40"></div>
+    </div>
 </div>
 
-<!-- MODULO PRINCIPAL -->
 <script type="module" src="main.js"></script>
-
 </body>
 </html>
