@@ -20,107 +20,124 @@ body {
 }
 .pointer-events-auto { pointer-events: auto; }
 
-/* PANTALLA DE INICIO (LOBBY) */
-#lobby-screen {
+/* CONSOLA DE DEPURACIÓN (NUEVO) */
+#debug-console {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    width: 350px;
+    height: 250px;
+    background: rgba(0, 0, 0, 0.85);
+    border: 1px solid #333;
+    border-left: 4px solid #00ff00;
+    color: #00ff00;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 11px;
+    overflow-y: auto;
+    z-index: 1000; /* Encima de todo */
+    padding: 10px;
+    pointer-events: none; /* Dejar pasar clics */
+    display: block;
+    box-shadow: 0 0 15px rgba(0, 255, 0, 0.1);
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* Scrollbar custom para la consola */
+#debug-console::-webkit-scrollbar { width: 5px; }
+#debug-console::-webkit-scrollbar-thumb { background: #00ff00; border-radius: 2px; }
+#debug-console::-webkit-scrollbar-track { background: #111; }
+
+/* PANTALLA DE INICIO */
+#start-screen {
     position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     background: linear-gradient(135deg, #050510 0%, #1a1a2e 100%);
     z-index: 300;
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
     color: white;
-    padding-top: 50px;
+    transition: opacity 0.5s;
 }
 
-#lobby-screen h1 {
+#start-screen h1 {
     font-size: 3rem;
     margin-bottom: 10px;
-    background: -webkit-linear-gradient(#fff, #00ccff);
+    background: -webkit-linear-gradient(#fff, #aaa);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    text-shadow: 0 0 30px rgba(0, 200, 255, 0.3);
+    text-shadow: 0 10px 20px rgba(0,0,0,0.5);
     text-align: center;
 }
 
-.lobby-panel {
-    background: rgba(20, 20, 35, 0.95);
-    border: 1px solid #444;
-    border-radius: 15px;
-    padding: 30px;
-    width: 80%;
-    max-width: 500px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-}
-
-.lobby-btn {
-    background: linear-gradient(90deg, #0088cc, #0055aa);
-    border: none;
-    padding: 15px;
-    color: white;
-    font-size: 1.1rem;
-    font-weight: bold;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: 0.2s;
+#start-screen p {
+    color: #88ccff;
+    letter-spacing: 2px;
+    margin-bottom: 40px;
+    font-size: 0.9rem;
     text-transform: uppercase;
-    letter-spacing: 1px;
 }
-.lobby-btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,100,255,0.4); }
-.lobby-btn:active { transform: translateY(0); }
-.lobby-btn.secondary { background: #333; }
 
-/* LISTA DE SALAS */
-#room-list {
-    max-height: 200px;
-    overflow-y: auto;
-    border: 1px solid #333;
-    border-radius: 8px;
-    background: #0a0a10;
-}
-.room-item {
-    padding: 10px 15px;
-    border-bottom: 1px solid #222;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+#btn-start {
+    background: linear-gradient(90deg, #ff3333, #aa0000);
+    border: none;
+    padding: 15px 50px;
+    color: white;
+    font-size: 1.2rem;
+    font-weight: bold;
+    border-radius: 30px;
     cursor: pointer;
-    transition: 0.2s;
+    box-shadow: 0 0 20px rgba(255, 0, 0, 0.4);
+    transition: transform 0.2s, box-shadow 0.2s;
+    letter-spacing: 1px;
+    pointer-events: auto;
 }
-.room-item:hover { background: #1a1a2a; }
-.room-item span { font-family: monospace; color: #aaa; }
-.room-item strong { color: #fff; }
 
-/* MODAL CREAR SALA */
-#create-room-modal {
-    display: none;
+#btn-start:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 30px rgba(255, 50, 50, 0.6);
+}
+
+#btn-start:active {
+    transform: scale(0.98);
+}
+
+/* MENÚ DE CREACIÓN/UNIÓN (Dentro de start screen) */
+#lobby-ui {
+    display: none; /* Oculto inicialmente */
     flex-direction: column;
     gap: 15px;
+    align-items: center;
+    width: 100%;
 }
 
-/* INPUTS */
-.lobby-input-group { display: flex; justify-content: space-between; align-items: center; font-size: 14px; color: #ddd; }
-input[type=text] {
-    background: #111; border: 1px solid #444; padding: 10px; color: white; border-radius: 5px; width: 100%;
+.lobby-input {
+    padding: 10px;
+    border-radius: 20px;
+    border: 1px solid #444;
+    background: rgba(255,255,255,0.1);
+    color: white;
+    text-align: center;
+    font-family: inherit;
+    width: 200px;
 }
 
 /* PANTALLA DE CARGA */
 #loading {
     position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-    background: #050510; z-index: 400; display: none; flex-direction: column;
+    background: #050510; z-index: 200; display: none; flex-direction: column;
     align-items: center; justify-content: center; color: white;
-    font-family: monospace; pointer-events: auto;
+    font-family: monospace; transition: opacity 0.5s; pointer-events: auto;
 }
 .loader {
     width: 48px; height: 48px; border: 5px solid #FFF;
-    border-bottom-color: #00ccff; border-radius: 50%; display: inline-block;
+    border-bottom-color: #ff0000; border-radius: 50%; display: inline-block;
     box-sizing: border-box; animation: rotation 1s linear infinite; margin-bottom: 20px;
 }
 @keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-/* HUD EN JUEGO */
+/* MENÚ CONFIGURACIÓN */
 #menu-btn {
     position: absolute; top: 20px; right: 20px;
     width: 44px; height: 44px; background: rgba(0,0,0,0.6);
@@ -129,6 +146,7 @@ input[type=text] {
     cursor: pointer; backdrop-filter: blur(5px); transition: background 0.2s;
     z-index: 101;
 }
+#menu-btn:active { background: rgba(255,255,255,0.2); }
 
 #menu-modal {
     position: absolute; top: 70px; right: 20px;
@@ -137,21 +155,37 @@ input[type=text] {
     display: none; flex-direction: column; gap: 12px; width: 280px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.8);
     z-index: 100;
+    max-height: 85vh; overflow-y: auto;
 }
 .menu-item { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #ddd; }
 .menu-group-title { color:#aaa; font-size:11px; letter-spacing:1px; border-top: 1px solid #444; padding-top:10px; margin-top:5px; font-weight: bold; }
 
+/* CONTROLES */
 .switch { position: relative; display: inline-block; width: 40px; height: 22px; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .slider-switch { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #444; transition: .3s; border-radius: 22px; }
 .slider-switch:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
-input:checked + .slider-switch { background-color: #00ccff; }
+input:checked + .slider-switch { background-color: #ff3333; }
 input:checked + .slider-switch:before { transform: translateX(18px); }
 
-input[type=range].menu-range { width: 110px; accent-color: #00ccff; height: 4px; background: #444; border-radius: 2px; }
-.val-display { font-family: monospace; color: #00ccff; font-weight: bold; width: 50px; text-align: right; font-size: 12px;}
+input[type=range].menu-range { width: 110px; accent-color: #ff3333; height: 4px; background: #444; border-radius: 2px; }
+.val-display { font-family: monospace; color: #ff3333; font-weight: bold; width: 50px; text-align: right; font-size: 12px;}
 
-#manual-controls { display: block; width: 100%; height: 100%; }
+#fps-counter {
+    position: absolute; bottom: 10px; left: 10px;
+    color: #00ff00; font-family: monospace; font-size: 14px;
+    background: rgba(0,0,0,0.5); padding: 4px 8px; border-radius: 4px;
+}
+
+#auto-controls {
+    position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.6); padding: 15px 25px;
+    border-radius: 30px; color: white; backdrop-filter: blur(4px);
+    border: 1px solid rgba(255,255,255,0.2); display: flex; gap: 10px; align-items: center;
+}
+input[type=range].main-slider { accent-color: #ffaa00; cursor: pointer; width: 200px; }
+
+#manual-controls { display: none; width: 100%; height: 100%; }
 
 #joystick-zone {
     position: absolute; bottom: 40px; left: 40px;
@@ -161,9 +195,9 @@ input[type=range].menu-range { width: 110px; accent-color: #00ccff; height: 4px;
 }
 #joystick-knob {
     position: absolute; top: 50%; left: 50%;
-    width: 50px; height: 50px; background: rgba(0, 200, 255, 0.8);
+    width: 50px; height: 50px; background: rgba(255, 50, 50, 0.8);
     border-radius: 50%; transform: translate(-50%, -50%);
-    box-shadow: 0 0 15px rgba(0,200,255,0.4);
+    box-shadow: 0 0 15px rgba(255,0,0,0.4);
     pointer-events: none;
 }
 
@@ -178,7 +212,7 @@ input[type=range].menu-range { width: 110px; accent-color: #00ccff; height: 4px;
 }
 .pedal:active { transform: scale(0.95); opacity: 0.9; border-color: white; }
 
-#gas-btn { bottom: 40px; right: 40px; width: 80px; height: 180px; background: linear-gradient(to top, #0044aa, #0088ff); }
+#gas-btn { bottom: 40px; right: 40px; width: 80px; height: 180px; background: linear-gradient(to top, #880000, #ff4444); }
 #brake-btn { bottom: 40px; right: 140px; width: 90px; height: 70px; background: linear-gradient(to top, #222, #555); font-size: 24px; border-radius: 10px; }
 
 #hud-speed {
@@ -186,12 +220,5 @@ input[type=range].menu-range { width: 110px; accent-color: #00ccff; height: 4px;
     text-align: right; font-family: 'Arial Black', sans-serif;
     color: white; text-shadow: 0 0 10px black; pointer-events: none;
 }
-#hud-speed span { font-size: 40px; color: #00ccff; display: block; line-height: 0.8;}
+#hud-speed span { font-size: 40px; color: #ff3333; display: block; line-height: 0.8;}
 #hud-speed small { font-size: 12px; opacity: 0.7; letter-spacing: 2px;}
-
-#player-count {
-    position: absolute; top: 20px; left: 20px;
-    background: rgba(0,0,0,0.5); color: #00ff00;
-    padding: 5px 10px; border-radius: 5px; font-family: monospace;
-    z-index: 10;
-}
