@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Photonik Racer</title>
+    <title>Photonik Racer Online</title>
     
-    <!-- 1. CARGA SEGURA DE SOCKET.IO (CDN) -->
+    <!-- Librerías Externas -->
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-
-    <!-- 2. MAPA DE IMPORTACIONES (Para Three.js moderno) -->
+    
+    <!-- Import Map para Three.js -->
     <script type="importmap">
     {
         "imports": {
@@ -18,450 +18,526 @@
     }
     </script>
 
-    <!-- 3. SISTEMA DE ERRORES VISUAL (Emergencia) -->
-    <script>
-        window.onerror = function(msg, url, line, col, error) {
-            const el = document.getElementById('fatal-error');
-            if(el) {
-                el.style.display = 'block';
-                el.innerHTML += `<p>❌ <b>ERROR:</b> ${msg}<br><small>${url}:${line}</small></p>`;
-            }
-            return false; 
-        };
-        
-        // Log seguro
-        function sysLog(msg, color='white') {
-            const consoleEl = document.getElementById('console-log');
-            if(consoleEl) {
-                const span = document.createElement('div');
-                span.style.color = color;
-                span.innerHTML = `> ${msg}`;
-                consoleEl.appendChild(span);
-                consoleEl.scrollTop = consoleEl.scrollHeight;
-            }
-            console.log(`[SYS] ${msg}`);
-        }
-    </script>
-
     <style>
-        body { margin: 0; overflow: hidden; background: #050510; color: white; font-family: 'Segoe UI', sans-serif; user-select: none; }
+        body { margin: 0; overflow: hidden; background: #000; color: white; font-family: 'Segoe UI', sans-serif; user-select: none; }
         
-        /* PANTALLA DE ERROR */
-        #fatal-error { display: none; position: fixed; top: 0; left: 0; width: 100%; padding: 20px; background: rgba(100,0,0,0.9); color: white; z-index: 9999; font-family: monospace; border-bottom: 2px solid red; }
+        /* PANTALLAS */
+        #ui-layer { display: none; position: absolute; top:0; left:0; width:100%; height:100%; pointer-events: none; z-index: 10; }
+        .screen { position: absolute; top:0; left:0; width:100%; height:100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(circle at center, #223, #000); z-index: 20; transition: opacity 0.5s; }
+        
+        .panel { background: rgba(0,0,0,0.8); padding: 30px; border-radius: 20px; border: 1px solid #444; text-align: center; width: 90%; max-width: 400px; backdrop-filter: blur(10px); }
+        
+        h1 { margin: 0 0 20px 0; font-size: 3rem; background: linear-gradient(to right, #fff, #0af); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-style: italic; letter-spacing: -2px; }
+        
+        button { background: #0af; border: none; padding: 15px 30px; color: #000; font-weight: bold; font-size: 1.2rem; cursor: pointer; border-radius: 5px; margin: 10px 0; width: 100%; transition: 0.2s; text-transform: uppercase; }
+        button:hover { transform: scale(1.05); background: #fff; box-shadow: 0 0 20px #0af; }
+        button.secondary { background: #444; color: #fff; }
+        
+        input { background: #222; border: 1px solid #555; padding: 15px; color: white; width: 100%; box-sizing: border-box; text-align: center; font-size: 1.2rem; border-radius: 5px; margin-bottom: 10px; text-transform: uppercase; }
 
-        /* CONSOLA */
-        #debug-ui { position: absolute; top: 10px; left: 10px; z-index: 1000; width: 300px; pointer-events: none; }
-        #console-log { height: 100px; overflow-y: auto; background: rgba(0,0,0,0.5); font-size: 10px; padding: 5px; font-family: monospace; pointer-events: auto; }
+        /* HUD JUEGO */
+        .hud-element { pointer-events: auto; position: absolute; }
+        
+        #joystick-zone { bottom: 40px; left: 40px; width: 140px; height: 140px; border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; }
+        #joystick-knob { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(0, 170, 255, 0.8); border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 15px #0af; }
+        
+        .pedal { bottom: 40px; width: 80px; height: 160px; border-radius: 10px; border: 2px solid rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-size: 2rem; cursor: pointer; transition: 0.1s; }
+        .pedal:active { transform: scale(0.95); opacity: 0.8; }
+        #gas-btn { right: 40px; background: linear-gradient(to top, #400, #f00); box-shadow: 0 0 20px #f004; }
+        #brake-btn { right: 140px; height: 100px; bottom: 40px; background: #333; }
+        
+        #speed-display { top: 20px; right: 20px; font-family: monospace; font-size: 4rem; font-weight: bold; font-style: italic; text-shadow: 0 0 10px #0af; color: #fff; text-align: right; }
+        #speed-label { font-size: 1rem; color: #888; display: block; }
 
-        /* UI PANTALLAS */
-        .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.5s; }
-        #screen-game { display: none; pointer-events: none; } /* El juego deja pasar eventos al canvas excepto controles */
-        
-        /* ESTILOS MENU */
-        h1 { font-size: 40px; text-shadow: 0 0 20px #0ff; margin-bottom: 30px; letter-spacing: 5px; background: linear-gradient(to right, #fff, #0ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;}
-        button { background: #222; border: 1px solid #444; color: white; padding: 15px 30px; font-size: 16px; margin: 10px; cursor: pointer; border-radius: 5px; transition: 0.2s; text-transform: uppercase; font-weight: bold; }
-        button:hover { background: #333; border-color: #fff; transform: scale(1.05); }
-        button.primary { background: #0066ff; border-color: #0088ff; box-shadow: 0 0 15px #0066ff88; }
-        
-        .panel { background: rgba(20,20,30,0.9); padding: 30px; border-radius: 20px; border: 1px solid #444; text-align: center; max-width: 400px; width: 90%; }
-        input { background: #111; border: 1px solid #555; color: white; padding: 10px; border-radius: 5px; text-align: center; width: 60%; font-size: 16px; margin-bottom: 10px; }
+        /* ROOM LIST */
+        #room-list { max-height: 200px; overflow-y: auto; margin-top: 15px; border-top: 1px solid #444; }
+        .room-item { padding: 10px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
+        .room-item button { width: auto; padding: 5px 15px; font-size: 0.8rem; margin: 0; }
 
-        /* LISTA SALAS */
-        #room-list { max-height: 200px; overflow-y: auto; margin-top: 20px; border-top: 1px solid #444; }
-        .room-row { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(255,255,255,0.05); margin-bottom: 5px; border-radius: 5px; }
-        .room-row button { padding: 5px 15px; font-size: 12px; margin: 0; }
-
-        /* CONTROLES JUEGO */
-        #hud { position: absolute; inset: 0; pointer-events: none; }
-        .hud-el { pointer-events: auto; }
-        
-        #joystick-area { position: absolute; bottom: 50px; left: 50px; width: 150px; height: 150px; border: 2px solid rgba(255,255,255,0.2); border-radius: 50%; }
-        #joystick-dot { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: #f00; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 15px #f00; }
-        
-        #pedal-gas { position: absolute; bottom: 50px; right: 40px; width: 80px; height: 150px; background: linear-gradient(#400, #f00); border-radius: 10px; border: 2px solid #fff; display: grid; place-items: center; font-size: 30px; }
-        #pedal-brake { position: absolute; bottom: 50px; right: 140px; width: 70px; height: 100px; background: #444; border-radius: 10px; border: 2px solid #888; display: grid; place-items: center; font-size: 20px; }
-        
-        #speed-display { position: absolute; top: 20px; right: 20px; text-align: right; font-family: monospace; }
-        .big-num { font-size: 60px; font-weight: bold; color: #ff0; text-shadow: 0 0 10px #ff0; }
-        
-        #loading-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:black; z-index:2000; display:none; place-items: center; color: #0ff; font-family: monospace; font-size: 20px; }
+        #loading { position: fixed; top:0; left:0; width:100%; height:100%; background: #000; z-index: 100; display: none; align-items: center; justify-content: center; color: #0af; font-family: monospace; letter-spacing: 5px; }
     </style>
 </head>
 <body>
 
-<!-- ERROR CATCHER -->
-<div id="fatal-error"></div>
+<!-- CARGA -->
+<div id="loading">GENERANDO MUNDO...</div>
 
-<!-- CONSOLA -->
-<div id="debug-ui">
-    <div style="background:#222; color:#0f0; padding:2px;">SYSTEM LOG</div>
-    <div id="console-log"></div>
-</div>
-
-<!-- PANTALLA 1: LOGIN -->
-<div id="screen-login" class="screen" style="z-index: 10;">
+<!-- LOGIN -->
+<div id="screen-login" class="screen">
     <div class="panel">
         <h1>PHOTONIK</h1>
-        <p style="color:#888; margin-bottom:20px;">MULTIPLAYER RACER</p>
-        <button id="btn-start" class="primary">CONECTAR A SERVIDOR</button>
-        <p id="status-text" style="font-size:12px; margin-top:15px; color:yellow;">Esperando...</p>
+        <p>MULTIPLAYER EDITION</p>
+        <button id="btn-connect">CONECTAR</button>
+        <div id="status" style="color:#666; font-size:0.8rem; margin-top:10px;">Offline</div>
     </div>
 </div>
 
-<!-- PANTALLA 2: LOBBY -->
-<div id="screen-lobby" class="screen" style="display:none; z-index: 9;">
+<!-- LOBBY -->
+<div id="screen-lobby" class="screen" style="display:none;">
     <div class="panel">
-        <h2>SALA DE ESPERA</h2>
-        <button id="btn-create" class="primary" style="width:100%">CREAR NUEVA PARTIDA</button>
-        <div style="margin: 20px 0; border-top:1px solid #555;"></div>
-        
-        <input type="text" id="inp-code" placeholder="CÓDIGO SALA">
-        <button id="btn-join">ENTRAR</button>
-        <button id="btn-refresh">🔄</button>
-        
-        <div id="room-list">
-            <div style="padding:10px; color:#666">Buscando...</div>
+        <h2>LOBBY</h2>
+        <button id="btn-create">CREAR SALA</button>
+        <div style="border-top:1px solid #444; margin:15px 0;"></div>
+        <input id="inp-code" placeholder="CÓDIGO DE SALA">
+        <div style="display:flex; gap:10px;">
+            <button id="btn-join" class="secondary">UNIRSE</button>
+            <button id="btn-refresh" class="secondary" style="width:50px;">↻</button>
         </div>
+        <div id="room-list"></div>
     </div>
 </div>
 
-<!-- PANTALLA 3: JUEGO -->
-<div id="screen-game" class="screen">
-    <div id="hud">
-        <div id="speed-display"><span class="big-num" id="speed-val">0</span> KM/H</div>
-        
-        <!-- Controles Táctiles -->
-        <div id="joystick-area" class="hud-el"><div id="joystick-dot"></div></div>
-        <div id="pedal-brake" class="hud-el">🛑</div>
-        <div id="pedal-gas" class="hud-el">⚡</div>
-    </div>
+<!-- HUD JUEGO -->
+<div id="ui-layer">
+    <div id="speed-display" class="hud-element">0<span id="speed-label">KM/H</span></div>
+    
+    <div id="joystick-zone" class="hud-element"><div id="joystick-knob"></div></div>
+    <div id="brake-btn" class="hud-element pedal">🛑</div>
+    <div id="gas-btn" class="hud-element pedal">⚡</div>
 </div>
 
-<div id="loading-overlay">CARGANDO MUNDO...</div>
-
-<!-- LÓGICA PRINCIPAL (MODULO) -->
 <script type="module">
-    import * as THREE from 'three';
-    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
-    // --- VARIABLES GLOBALES ---
-    let socket;
-    let myId;
-    let inGame = false;
-    let gameLoopReq;
-    
-    // Elementos DOM
-    const screens = {
-        login: document.getElementById('screen-login'),
-        lobby: document.getElementById('screen-lobby'),
-        game: document.getElementById('screen-game')
+// ==========================================
+// 1. SISTEMA DE RED Y GESTIÓN
+// ==========================================
+let socket;
+let myId = null;
+let inGame = false;
+let gameSeed = 0;
+
+// Estado Local vs Remoto
+const state = {
+    myCar: null,
+    players: {}, // Mallas de otros jugadores
+    input: { steer: 0, gas: false, brake: false },
+    serverData: [] // Último paquete recibido
+};
+
+// UI Elements
+const ui = {
+    login: document.getElementById('screen-login'),
+    lobby: document.getElementById('screen-lobby'),
+    gameHUD: document.getElementById('ui-layer'),
+    loading: document.getElementById('loading'),
+    speed: document.getElementById('speed-display')
+};
+
+// Inicializar
+window.onload = () => {
+    document.getElementById('btn-connect').onclick = connect;
+    document.getElementById('btn-create').onclick = () => socket.emit('createRoom', {});
+    document.getElementById('btn-refresh').onclick = () => socket.emit('getRooms');
+    document.getElementById('btn-join').onclick = () => {
+        const c = document.getElementById('inp-code').value;
+        if(c) socket.emit('joinRoom', c);
     };
     
-    // Estado Juego
-    const state = {
-        players: {},
-        myCar: null,
-        input: { steer: 0, gas: false, brake: false }
-    };
+    // Función global para botones dinámicos
+    window.joinRoom = (id) => socket.emit('joinRoom', id);
+    
+    setupControls();
+};
 
-    // --- 1. INICIALIZACIÓN ---
-    window.onload = () => {
-        sysLog("DOM Cargado. Inicializando...");
+function connect() {
+    document.getElementById('status').innerText = "Conectando...";
+    socket = io();
 
-        // Verificación crítica
-        if (typeof io === 'undefined') {
-            throw new Error("La librería Socket.IO no se ha cargado. Revisa tu conexión a internet.");
-        }
-
-        // Bindings Botones
-        document.getElementById('btn-start').onclick = connectToServer;
-        document.getElementById('btn-create').onclick = () => socket.emit('createRoom', { maxKmh: 600 });
-        document.getElementById('btn-refresh').onclick = () => socket.emit('getRooms');
-        document.getElementById('btn-join').onclick = () => {
-            const code = document.getElementById('inp-code').value;
-            if(code) socket.emit('joinRoom', code);
-        };
-        
-        // Exponer función de unirse para los botones generados dinámicamente
-        window.tryJoin = (id) => {
-            if(socket) socket.emit('joinRoom', id);
-        };
-
-        setupControls();
-    };
-
-    // --- 2. RED (SOCKET.IO) ---
-    function connectToServer() {
-        const btn = document.getElementById('btn-start');
-        const status = document.getElementById('status-text');
-        
-        btn.disabled = true;
-        status.innerText = "Intentando conectar...";
-        
-        // Conexión
-        socket = io({
-            transports: ['websocket', 'polling'], // Forzar métodos robustos
-            reconnectionAttempts: 5
-        });
-
-        socket.on('connect', () => {
-            sysLog(`Conectado! ID: ${socket.id}`, '#0f0');
-            myId = socket.id;
-            
-            // Cambio pantalla
-            screens.login.style.display = 'none';
-            screens.lobby.style.display = 'flex';
-            socket.emit('getRooms');
-        });
-
-        socket.on('connect_error', (err) => {
-            sysLog(`Error Conexión: ${err.message}`, 'red');
-            status.innerText = "Fallo de conexión. Reintentando...";
-            status.style.color = "red";
-            btn.disabled = false;
-        });
-
-        // Eventos Sala
-        socket.on('roomList', updateRoomList);
-        
-        socket.on('roomCreated', (data) => {
-            sysLog(`Sala creada: ${data.roomId}`, '#0ff');
-            startGame(data.seed);
-        });
-        
-        socket.on('roomJoined', (data) => {
-            sysLog(`Unido a sala: ${data.roomId}`, '#0ff');
-            startGame(data.seed);
-        });
-
-        socket.on('errorMsg', (msg) => alert(msg));
-        
-        // Evento Juego
-        socket.on('u', (data) => {
-            if(inGame) updateGameWorld(data);
-        });
-        
-        socket.on('playerLeft', (id) => {
-            if(state.players[id]) {
-                scene.remove(state.players[id].mesh);
-                delete state.players[id];
-            }
-        });
-    }
-
-    function updateRoomList(list) {
-        const container = document.getElementById('room-list');
-        container.innerHTML = '';
-        
-        if(list.length === 0) {
-            container.innerHTML = '<div style="padding:10px; color:#666">No hay partidas. ¡Crea una!</div>';
-            return;
-        }
-
+    socket.on('connect', () => {
+        myId = socket.id;
+        ui.login.style.display = 'none';
+        ui.lobby.style.display = 'flex';
+        socket.emit('getRooms');
+    });
+    
+    socket.on('roomList', (list) => {
+        const el = document.getElementById('room-list');
+        el.innerHTML = '';
+        if(list.length === 0) el.innerHTML = '<div style="color:#666; padding:10px;">No hay salas. ¡Crea una!</div>';
         list.forEach(r => {
-            const div = document.createElement('div');
-            div.className = 'room-row';
-            div.innerHTML = `
-                <span><b>${r.id}</b> (${r.players} Jug)</span>
-                <button onclick="window.tryJoin('${r.id}')">ENTRAR</button>
-            `;
-            container.appendChild(div);
+            el.innerHTML += `
+                <div class="room-item">
+                    <span>Sala <b>${r.id}</b> (${r.players})</span>
+                    <button class="secondary" onclick="joinRoom('${r.id}')">ENTRAR</button>
+                </div>`;
         });
-    }
+    });
 
-    // --- 3. MOTOR GRÁFICO (THREE.JS) ---
-    let scene, camera, renderer, composer;
+    socket.on('roomCreated', (d) => initGame(d.seed));
+    socket.on('roomJoined', (d) => initGame(d.seed));
+    socket.on('errorMsg', (m) => alert(m));
 
-    function startGame(seed) {
-        document.getElementById('loading-overlay').style.display = 'grid';
-        screens.lobby.style.display = 'none';
-        
-        // Init ThreeJS
-        scene = new THREE.Scene();
-        scene.fog = new THREE.FogExp2(0x000000, 0.002);
-        
-        camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 2000);
-        
-        renderer = new THREE.WebGLRenderer({ antialias: false }); // False para rendimiento
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.toneMapping = THREE.ReinhardToneMapping;
-        document.body.appendChild(renderer.domElement);
-        
-        // Post-Processing
-        composer = new EffectComposer(renderer);
-        composer.addPass(new RenderPass(scene, camera));
-        const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, innerHeight), 1.5, 0.4, 0.85);
-        bloom.threshold = 0;
-        bloom.strength = 0.6; // Neon intenso
-        bloom.radius = 0.5;
-        composer.addPass(bloom);
+    socket.on('u', (data) => {
+        if(inGame) updateWorld(data);
+    });
 
-        // Environment
-        buildWorld(seed);
+    socket.on('playerLeft', (id) => {
+        if(state.players[id]) {
+            scene.remove(state.players[id]);
+            delete state.players[id];
+        }
+    });
+}
 
-        // Start Loop
+function initGame(seed) {
+    gameSeed = seed;
+    ui.lobby.style.display = 'none';
+    ui.loading.style.display = 'flex';
+    
+    // Hack para el generador procedural: Override Math.random con semilla
+    let localSeed = seed;
+    Math.random = function() {
+        const x = Math.sin(localSeed++) * 10000;
+        return x - Math.floor(x);
+    };
+
+    setTimeout(() => {
+        initThreeJS();
+        ui.loading.style.display = 'none';
+        ui.gameHUD.style.display = 'block';
         inGame = true;
         animate();
+    }, 1000);
+}
+
+// ==========================================
+// 2. MOTOR GRÁFICO (THREE.JS) - TU CÓDIGO INTEGRADO
+// ==========================================
+let scene, camera, renderer, composer;
+let chunks = [];
+let genPoint, genAngle, totalGenDist;
+const chunksVisible = 12;
+const chunkLength = 100;
+
+// Constantes visuales
+const ROAD_WIDTH_HALF = 8.5;
+
+function initThreeJS() {
+    scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x87CEEB, 0.002);
+    
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth/innerHeight, 0.1, 5000);
+    camera.position.set(0, 5, -10);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    document.body.appendChild(renderer.domElement);
+
+    // Post-Process
+    const renderPass = new RenderPass(scene, camera);
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, innerHeight), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0.7;
+    bloomPass.strength = 0.3;
+    bloomPass.radius = 0.5;
+    
+    composer = new EffectComposer(renderer);
+    composer.addPass(renderPass);
+    composer.addPass(bloomPass);
+
+    // Iluminación
+    setupLights();
+    
+    // Iniciar Generador Procedural
+    genPoint = new THREE.Vector3(0, 0, 0);
+    genAngle = 0;
+    totalGenDist = 0;
+    chunks = [];
+    
+    for(let i=0; i<chunksVisible; i++) spawnChunk();
+}
+
+function setupLights() {
+    const amb = new THREE.AmbientLight(0x404040, 2.0);
+    scene.add(amb);
+    
+    const sun = new THREE.DirectionalLight(0xffdf80, 2.5);
+    sun.position.set(100, 300, 100);
+    sun.castShadow = true;
+    sun.shadow.mapSize.width = 2048;
+    sun.shadow.mapSize.height = 2048;
+    sun.shadow.camera.far = 1000;
+    sun.shadow.camera.left = -500; sun.shadow.camera.right = 500;
+    sun.shadow.camera.top = 500; sun.shadow.camera.bottom = -500;
+    scene.add(sun);
+}
+
+// ==========================================
+// 3. GENERACIÓN PROCEDURAL (Sincronizada)
+// ==========================================
+class Chunk {
+    constructor(idx, startP, startA, startD) {
+        this.index = idx;
+        this.startDist = startD;
+        this.group = new THREE.Group();
+        scene.add(this.group);
         
-        setTimeout(() => {
-            document.getElementById('loading-overlay').style.display = 'none';
-            screens.game.style.display = 'block';
-        }, 1000);
-    }
-
-    function buildWorld(seed) {
-        // Suelo Grid
-        const grid = new THREE.GridHelper(5000, 200, 0xff00ff, 0x220022);
-        grid.position.y = -1;
-        scene.add(grid);
-
-        // Suelo Plano Reflectante
-        const plane = new THREE.Mesh(
-            new THREE.PlaneGeometry(5000, 5000),
-            new THREE.MeshBasicMaterial({ color: 0x110011 })
+        // Curva Bezier
+        const angleChange = (Math.random() - 0.5) * 1.5; // Curvas más pronunciadas
+        const endAngle = startA + angleChange;
+        
+        const p0 = startP;
+        const p3 = new THREE.Vector3(
+            Math.cos(endAngle) * chunkLength + p0.x,
+            (Math.random() - 0.5) * 10, // Variación altura suave
+            Math.sin(endAngle) * chunkLength + p0.z
         );
-        plane.rotation.x = -Math.PI/2;
-        plane.position.y = -1.1;
-        scene.add(plane);
         
-        // Sol Retro
-        const sun = new THREE.Mesh(
-            new THREE.CircleGeometry(500, 32),
-            new THREE.MeshBasicMaterial({ color: 0xffaa00 })
-        );
-        sun.position.set(0, 200, -2000);
-        scene.add(sun);
+        // Puntos control
+        const cp1 = new THREE.Vector3(Math.cos(startA)*chunkLength*0.5, 0, Math.sin(startA)*chunkLength*0.5).add(p0);
+        const cp2 = new THREE.Vector3(Math.cos(endAngle)*-chunkLength*0.5, 0, Math.sin(endAngle)*-chunkLength*0.5).add(p3);
+        
+        this.curve = new THREE.CubicBezierCurve3(p0, cp1, cp2, p3);
+        this.length = this.curve.getLength();
+        this.endDist = startD + this.length;
+        this.endPoint = p3;
+        this.endAngle = endAngle;
+        
+        this.buildMesh();
     }
-
-    function createCar(color) {
-        const g = new THREE.Group();
+    
+    buildMesh() {
+        const pts = this.curve.getSpacedPoints(20);
+        const frames = this.curve.computeFrenetFrames(20, false);
+        const geo = new THREE.PlaneGeometry(1,1, 20, 1);
         
-        // Cuerpo Tron
-        const geo = new THREE.BoxGeometry(2, 1, 4);
-        const mat = new THREE.MeshBasicMaterial({ color: 0x000000 }); // Negro base
-        const mesh = new THREE.Mesh(geo, mat);
+        // Construcción manual de la geometría de la carretera para seguir la curva
+        const pos = [];
+        const w = ROAD_WIDTH_HALF;
         
-        // Bordes Neon
-        const edges = new THREE.EdgesGeometry(geo);
-        const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: color }));
+        for(let i=0; i<=20; i++) {
+            const p = pts[i];
+            const n = frames.binormals[i];
+            // Izquierda
+            pos.push(p.x + n.x * w, p.y, p.z + n.z * w);
+            // Derecha
+            pos.push(p.x - n.x * w, p.y, p.z - n.z * w);
+        }
         
-        g.add(mesh);
-        g.add(line);
+        // Generar mesh carretera
+        // (Simplificado para brevedad, usamos Shape extrusion o similar en prod)
+        // Aquí usamos TubeGeometry rápido visual
+        const tube = new THREE.TubeGeometry(this.curve, 20, w, 3, false);
+        // Aplanar tubo
+        const m = new THREE.Mesh(tube, new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 }));
+        m.scale.y = 0.05; 
+        m.receiveShadow = true;
+        this.group.add(m);
         
-        return g;
+        // Decoración (Arboles, neones)
+        if(Math.random() > 0.3) {
+            const deco = new THREE.Mesh(new THREE.BoxGeometry(2, 10, 2), new THREE.MeshStandardMaterial({color: 0x00ff00}));
+            const t = Math.random();
+            const pt = this.curve.getPointAt(t);
+            deco.position.set(pt.x + 20, pt.y + 5, pt.z);
+            this.group.add(deco);
+        }
     }
+    
+    dispose() {
+        scene.remove(this.group);
+        // Limpieza memoria ThreeJS
+        this.group.traverse(o => { if(o.geometry) o.geometry.dispose(); });
+    }
+}
 
-    function updateGameWorld(serverData) {
-        serverData.forEach(p => {
-            let player = state.players[p.i];
+function spawnChunk() {
+    const idx = chunks.length > 0 ? chunks[chunks.length-1].index + 1 : 0;
+    const c = new Chunk(idx, genPoint, genAngle, totalGenDist);
+    chunks.push(c);
+    genPoint = c.endPoint;
+    genAngle = c.endAngle;
+    totalGenDist += c.length;
+}
+
+function getTrackData(dist) {
+    for(let c of chunks) {
+        if(dist >= c.startDist && dist < c.endDist) {
+            const local = dist - c.startDist;
+            const t = local / c.length;
+            return {
+                pos: c.curve.getPointAt(t),
+                tan: c.curve.getTangentAt(t),
+                bin: c.curve.computeFrenetFrames(1, false).binormals[0] // Aprox
+            };
+        }
+    }
+    return null;
+}
+
+// ==========================================
+// 4. LÓGICA DE JUEGO Y RENDER
+// ==========================================
+function createCarMesh(color) {
+    const g = new THREE.Group();
+    // Carrocería
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2, 0.8, 4.5), new THREE.MeshStandardMaterial({ color: color, roughness: 0.2, metalness: 0.6 }));
+    body.position.y = 0.6;
+    body.castShadow = true;
+    g.add(body);
+    
+    // Ruedas
+    const wGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16);
+    wGeo.rotateZ(Math.PI/2);
+    const wMat = new THREE.MeshStandardMaterial({color:0x111});
+    const w1 = new THREE.Mesh(wGeo, wMat); w1.position.set(1.1, 0.4, 1.5); g.add(w1);
+    const w2 = new THREE.Mesh(wGeo, wMat); w2.position.set(-1.1, 0.4, 1.5); g.add(w2);
+    const w3 = new THREE.Mesh(wGeo, wMat); w3.position.set(1.1, 0.4, -1.5); g.add(w3);
+    const w4 = new THREE.Mesh(wGeo, wMat); w4.position.set(-1.1, 0.4, -1.5); g.add(w4);
+    
+    return g;
+}
+
+function updateWorld(serverPack) {
+    if(!scene) return;
+    
+    // Mi ID (para cámara)
+    let myCarData = null;
+
+    serverPack.forEach(p => {
+        // ¿Existe el coche?
+        if(!state.players[p.i]) {
+            const mesh = createCarMesh(p.c);
+            scene.add(mesh);
+            state.players[p.i] = mesh;
             
-            // Nuevo jugador
-            if(!player) {
-                const mesh = createCar(p.c);
-                scene.add(mesh);
-                state.players[p.i] = { mesh: mesh };
-                player = state.players[p.i];
-                
-                if(p.i === myId) state.myCar = mesh;
-            }
-
-            // Interpolación visual
-            // Mapeamos Z (distancia) y X (lateral) a mundo 3D
-            const targetPos = new THREE.Vector3(p.x, 0.5, -p.z); // Invertimos Z para avanzar hacia fondo
-            
-            player.mesh.position.lerp(targetPos, 0.3);
-            player.mesh.rotation.y = -p.h; // Giro
-
+            // Si soy yo, añadir luces
             if(p.i === myId) {
-                // Actualizar HUD
-                document.getElementById('speed-val').innerText = Math.floor(p.s * 100);
-                
-                // Cámara Follow
-                const camOff = new THREE.Vector3(0, 8, 15); // Detrás y arriba
-                camera.position.lerp(player.mesh.position.clone().add(camOff), 0.1);
-                camera.lookAt(player.mesh.position);
+                const hl = new THREE.SpotLight(0xffffff, 800);
+                hl.position.set(0, 2, 0);
+                hl.target.position.set(0, 0, 20);
+                hl.castShadow = true;
+                mesh.add(hl);
+                mesh.add(hl.target);
+                state.myCar = mesh;
             }
-        });
-    }
-
-    function animate() {
-        if(!inGame) return;
-        requestAnimationFrame(animate);
-        composer.render();
-    }
-
-    // --- 4. CONTROLES ---
-    function setupControls() {
-        const send = () => {
-            if(socket && inGame) socket.emit('playerInput', state.input);
-        };
-
-        // Joystick Táctil
-        const zone = document.getElementById('joystick-area');
-        const knob = document.getElementById('joystick-dot');
-        let jId = null; 
-        const jRect = {x:0, w:0};
-
-        const moveJoy = (cx) => {
-            let dx = cx - (jRect.x + jRect.w/2);
-            dx = Math.max(-75, Math.min(75, dx)); // Clamp
-            knob.style.transform = `translate(${dx-25}px, -25px)`;
-            state.input.steer = dx / 75; // -1 a 1
-            send();
-        };
-
-        zone.addEventListener('touchstart', e => {
-            e.preventDefault();
-            jId = e.changedTouches[0].identifier;
-            const r = zone.getBoundingClientRect();
-            jRect.x = r.left; jRect.w = r.width;
-            moveJoy(e.changedTouches[0].clientX);
-        });
+        }
         
-        zone.addEventListener('touchmove', e => {
-            e.preventDefault();
-            for(let i=0; i<e.changedTouches.length; i++) {
-                if(e.changedTouches[i].identifier === jId) moveJoy(e.changedTouches[i].clientX);
+        const mesh = state.players[p.i];
+        
+        // --- PROYECCIÓN EN CURVA ---
+        // El servidor nos da distancia lineal (d) y offset lateral (l)
+        // Nosotros lo mapeamos a la curva procedural visual
+        const track = getTrackData(p.d);
+        
+        if(track) {
+            // Posición base en la curva
+            const pos = new THREE.Vector3().copy(track.pos);
+            
+            // Vector binormal (derecha) para el desplazamiento lateral
+            // Nota: En Bezier simple a veces hay que recalcular binormal preciso, aquí usamos approx
+            const binormal = new THREE.Vector3(track.tan.z, 0, -track.tan.x).normalize(); // Perpendicular simple Y-up
+            
+            pos.add(binormal.multiplyScalar(p.l));
+            
+            // Interpolación visual suave
+            mesh.position.lerp(pos, 0.4);
+            
+            // Orientación: Mirar hacia adelante en la tangente
+            const lookTarget = new THREE.Vector3().copy(pos).add(track.tan);
+            mesh.lookAt(lookTarget);
+            
+            // Guardar datos propios para HUD/Cámara
+            if(p.i === myId) {
+                myCarData = { pos: mesh.position.clone(), rot: mesh.rotation.clone(), speed: p.s };
+                ui.speed.innerHTML = Math.floor(p.s * 100) + '<span id="speed-label">KM/H</span>';
             }
-        });
-        
-        zone.addEventListener('touchend', e => {
-            e.preventDefault();
-            jId = null;
-            state.input.steer = 0;
-            knob.style.transform = `translate(-50%, -50%)`;
-            send();
-        });
+        }
+    });
 
-        // Pedales
-        const bind = (id, key) => {
-            const el = document.getElementById(id);
-            const down = (e) => { e.preventDefault(); state.input[key] = true; send(); };
-            const up = (e) => { e.preventDefault(); state.input[key] = false; send(); };
-            el.addEventListener('mousedown', down); window.addEventListener('mouseup', up);
-            el.addEventListener('touchstart', down); el.addEventListener('touchend', up);
-        };
-        bind('pedal-gas', 'gas');
-        bind('pedal-brake', 'brake');
+    // Gestión de Chunks infinita
+    // Si mi coche avanza, borrar chunks viejos y crear nuevos
+    if(myCarData && chunks.length > 0) {
+        // Encontrar en qué chunk estoy (aproximado por distancia server)
+        // ... Lógica simplificada: si la distancia total generada se queda corta, generar más
+        if(totalGenDist - myCarData.speed * 100 < totalGenDist) { 
+             // Spawn simple por frame si hace falta (optimizable)
+        }
         
-        // Teclado
-        window.addEventListener('keydown', e => {
-            if(e.key==='ArrowUp') state.input.gas=true;
-            if(e.key==='ArrowDown') state.input.brake=true;
-            if(e.key==='ArrowLeft') state.input.steer=-1;
-            if(e.key==='ArrowRight') state.input.steer=1;
-            send();
-        });
-        window.addEventListener('keyup', e => {
-            if(e.key==='ArrowUp') state.input.gas=false;
-            if(e.key==='ArrowDown') state.input.brake=false;
-            if(e.key==='ArrowLeft') state.input.steer=0;
-            if(e.key==='ArrowRight') state.input.steer=0;
-            send();
-        });
+        // Cámara Chase
+        const offset = new THREE.Vector3(0, 6, -12);
+        offset.applyQuaternion(state.myCar.quaternion);
+        const camPos = myCarData.pos.clone().add(offset);
+        camera.position.lerp(camPos, 0.1);
+        camera.lookAt(myCarData.pos.clone().add(new THREE.Vector3(0, 2, 10).applyQuaternion(state.myCar.quaternion)));
     }
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    
+    // Enviar Input
+    if(socket && myId) {
+        socket.emit('playerInput', state.input);
+    }
+    
+    // Generación dinámica de terreno si nos acercamos al final
+    // (Chequeo simple basado en último chunk)
+    if(state.myCar && chunks.length > 0) {
+        const lastC = chunks[chunks.length-1];
+        const distToEdge = lastC.endPoint.distanceTo(state.myCar.position);
+        if(distToEdge < 800) spawnChunk();
+        
+        // Limpieza
+        if(chunks.length > 15) {
+            chunks[0].dispose();
+            chunks.shift();
+        }
+    }
+
+    composer.render();
+}
+
+// ==========================================
+// 5. CONTROLES
+// ==========================================
+function setupControls() {
+    // Joystick
+    const joy = document.getElementById('joystick-zone');
+    const knob = document.getElementById('joystick-knob');
+    let jId = null; const jRect={x:0, w:0};
+    
+    const move = (cx) => {
+        let dx = cx - (jRect.x + jRect.w/2);
+        dx = Math.max(-60, Math.min(60, dx));
+        knob.style.transform = `translate(${dx-25}px, -25px)`;
+        state.input.steer = -(dx / 60); // Invertimos para ThreeJS standard
+    };
+    
+    joy.addEventListener('touchstart', e=>{ e.preventDefault(); jId=e.changedTouches[0].identifier; const r=joy.getBoundingClientRect(); jRect.x=r.left; jRect.w=r.width; move(e.changedTouches[0].clientX); });
+    joy.addEventListener('touchmove', e=>{ e.preventDefault(); for(let t of e.changedTouches) if(t.identifier===jId) move(t.clientX); });
+    joy.addEventListener('touchend', e=>{ e.preventDefault(); jId=null; state.input.steer=0; knob.style.transform='translate(-50%,-50%)'; });
+
+    // Pedales
+    const bind = (id, k) => {
+        const el = document.getElementById(id);
+        const on = e=>{e.preventDefault(); state.input[k]=true;};
+        const off = e=>{e.preventDefault(); state.input[k]=false;};
+        el.addEventListener('touchstart', on); el.addEventListener('touchend', off);
+        el.addEventListener('mousedown', on); window.addEventListener('mouseup', off);
+    };
+    bind('gas-btn', 'gas');
+    bind('brake-btn', 'brake');
+    
+    // Teclado
+    window.addEventListener('keydown', e=>{
+        if(e.key==='ArrowUp') state.input.gas=true;
+        if(e.key==='ArrowDown') state.input.brake=true;
+        if(e.key==='ArrowLeft') state.input.steer=1;
+        if(e.key==='ArrowRight') state.input.steer=-1;
+    });
+    window.addEventListener('keyup', e=>{
+        if(e.key==='ArrowUp') state.input.gas=false;
+        if(e.key==='ArrowDown') state.input.brake=false;
+        if(e.key==='ArrowLeft'||e.key==='ArrowRight') state.input.steer=0;
+    });
+}
 </script>
 </body>
 </html>
