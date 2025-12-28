@@ -3,163 +3,198 @@ const app = express();
 const http = require('http');
 const server = http.createServer(app);
 const { Server } = require("socket.io");
-const io = new Server(server);
 
-// Servir archivos estáticos de la carpeta 'public'
+// Configuración CORS permisiva para evitar bloqueos en la nube
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
 app.use(express.static('public'));
 
-// CONFIGURACIÓN FÍSICA
+// --- CONFIGURACIÓN FÍSICA ---
 const BASE_SPEED = 0.45;
-const ROAD_WIDTH_HALF = 8.5;
-const CAR_WIDTH_HALF = 1.0;
-const WALL_LIMIT = ROAD_WIDTH_HALF - CAR_WIDTH_HALF - 0.2;
+const WALL_LIMIT = 7.3; // Ancho pista 8.5 - Ancho coche 1.2
 
 const rooms = {}; 
 
-function getTrackCurvePoint(dist, seed) {
-    const curvature = Math.sin(dist * 0.01 + seed) * 0.5 + Math.sin(dist * 0.003 + seed) * 0.2;
-    const angle = curvature; 
-    const x = Math.sin(angle);
-    const z = Math.cos(angle); 
-    return { 
-        tangent: { x: x, y: 0, z: z }, // Simplificado para JS vainilla
-        right: { x: z, y: 0, z: -x }   // Cross product simplificado (UP es 0,1,0)
-    };
-}
-
 io.on('connection', (socket) => {
-    console.log('Nuevo jugador:', socket.id);
+    console.log(`[CONEXIÓN] Nuevo cliente: ${socket.id}`);
 
     socket.on('getRooms', () => {
-        const list = Object.values(rooms).map(r => ({
-            id: r.id,
-            players: Object.keys(r.players).length,
-            config: r.config
-        }));
+        // Limpieza de salas vacías o zombies antes de enviar
+        const list = [];
+        for (const rid in rooms) {
+            const r = rooms[rid];
+            const pCount = Object.keys(r.players).length;
+            if (pCount > 0) {
+                list.push({ id: r.id, players: pCount, config: r.config });
+            } else {
+                delete rooms[rid]; // Auto-limpieza
+            }
+        }
         socket.emit('roomList', list);
     });
 
     socket.on('createRoom', (data) => {
-        const roomId = Math.random().toString(36).substr(2, 4).toUpperCase();
+        const roomId = Math.random().toString(36).substr(2, 5).toUpperCase();
+        console.log(`[SALA] Creada ${roomId} por ${socket.id}`);
+        
         rooms[roomId] = {
             id: roomId,
             players: {},
-            config: { maxKmhLimit: data.maxKmh, accelKmhPerSec: data.accel },
-            trackSeed: Math.random() * 1000
+            config: { 
+                maxKmh: data.maxKmh || 500, 
+                accel: data.accel || 40 
+            },
+            trackSeed: Math.floor(Math.random() * 5000),
+            lastUpdate: Date.now()
         };
+        
         socket.emit('roomCreated', { roomId, seed: rooms[roomId].trackSeed });
         joinPlayer(socket, roomId);
     });
 
     socket.on('joinRoom', (roomId) => {
-        roomId = roomId.toUpperCase();
+        roomId = roomId ? roomId.toUpperCase() : "";
         if (rooms[roomId]) {
-            socket.emit('roomJoined', { roomId, config: rooms[roomId].config, seed: rooms[roomId].trackSeed });
+            console.log(`[SALA] ${socket.id} entró a ${roomId}`);
+            socket.emit('roomJoined', { 
+                roomId, 
+                config: rooms[roomId].config, 
+                seed: rooms[roomId].trackSeed 
+            });
             joinPlayer(socket, roomId);
         } else {
-            socket.emit('error', 'Sala no encontrada');
+            socket.emit('error', 'Sala no encontrada o cerrada');
         }
     });
 
     socket.on('playerInput', (input) => {
-        // Buscar en qué sala está el jugador
-        for (const rid in rooms) {
-            if (rooms[rid].players[socket.id]) {
-                rooms[rid].players[socket.id].input = input;
-                break;
-            }
+        // Búsqueda inversa optimizada: socket.data.room (feature de socket.io)
+        const roomId = socket.data.currentRoom;
+        if (roomId && rooms[roomId] && rooms[roomId].players[socket.id]) {
+            rooms[roomId].players[socket.id].input = input;
         }
     });
 
     socket.on('disconnect', () => {
-        for (const rid in rooms) {
-            if (rooms[rid].players[socket.id]) {
-                delete rooms[rid].players[socket.id];
-                io.to(rid).emit('playerLeft', socket.id);
-                if (Object.keys(rooms[rid].players).length === 0) delete rooms[rid];
-                break;
+        const roomId = socket.data.currentRoom;
+        if (roomId && rooms[roomId]) {
+            console.log(`[DESCONEXIÓN] ${socket.id} de sala ${roomId}`);
+            delete rooms[roomId].players[socket.id];
+            io.to(roomId).emit('playerLeft', socket.id);
+            
+            // Si la sala queda vacía, se elimina
+            if (Object.keys(rooms[roomId].players).length === 0) {
+                delete rooms[roomId];
+                console.log(`[SALA] ${roomId} eliminada (vacía)`);
             }
         }
     });
 });
 
 function joinPlayer(socket, roomId) {
-    const color = '#' + Math.floor(Math.random()*16777215).toString(16);
+    // Guardar referencia en el socket para acceso rápido
+    socket.data.currentRoom = roomId;
+    
+    // Asignar color aleatorio brillante
+    const hue = Math.floor(Math.random() * 360);
+    const color = `hsl(${hue}, 100%, 50%)`;
+
     rooms[roomId].players[socket.id] = {
         id: socket.id,
-        color: color,
-        manualSpeed: 0.0,
-        worldHeading: 0.0,
-        lateralOffset: 0.0,
-        trackDist: 0.0,
+        color: color, // Usamos string HSL que Three.js entiende
+        speed: 0.0,
+        heading: 0.0,
+        lat: 0.0,
+        dist: 0.0,
         input: { steer: 0, gas: false, brake: false }
     };
     socket.join(roomId);
 }
 
-// BUCLE DE FÍSICA (60 Hz)
+// --- BUCLE FÍSICO SERVIDOR (60 FPS) ---
 setInterval(() => {
     for (const rid in rooms) {
         const r = rooms[rid];
-        const pack = [];
+        const updatePack = [];
         
+        // Configuración de la sala
+        const maxSpd = BASE_SPEED * (r.config.maxKmh / 100);
+        const accBase = (BASE_SPEED * (r.config.accel / 100)) / 60;
+
         for (const pid in r.players) {
             const p = r.players[pid];
             
-            // FÍSICA SIMPLIFICADA EN SERVIDOR
-            const maxSpeed = BASE_SPEED * (r.config.maxKmhLimit / 100);
-            const accel = (BASE_SPEED * (r.config.accelKmhPerSec / 100)) / 60;
-
+            // 1. Aceleración / Frenado
             if (p.input.gas) {
-                if (p.manualSpeed < maxSpeed) p.manualSpeed += accel;
+                if (p.speed < maxSpd) p.speed += accBase;
             } else if (p.input.brake) {
-                p.manualSpeed -= accel * 2;
+                p.speed -= accBase * 2;
             } else {
-                p.manualSpeed *= 0.99;
+                p.speed *= 0.99; // Fricción
             }
-            if (p.manualSpeed < 0) p.manualSpeed = 0;
+            if (p.speed < 0) p.speed = 0;
 
-            let sens = 0.04; 
-            // Lógica simple de giro server-side
-            p.worldHeading += p.input.steer * sens;
-
-            const curve = getTrackCurvePoint(p.trackDist, r.trackSeed);
+            // 2. Dirección (Sensibilidad variable por velocidad)
+            const kmh = p.speed * 100;
+            let sens = 0.04;
+            if(kmh < 60) sens = 0.06;
+            else if(kmh > 300) sens = 0.015;
             
-            // Proyección de movimiento
-            // Movemos según heading del coche
-            const mx = Math.sin(p.worldHeading) * p.manualSpeed;
-            const mz = Math.cos(p.worldHeading) * p.manualSpeed;
+            p.heading += p.input.steer * sens;
+
+            // 3. Movimiento en Pista (Simplificado sin Three.js)
+            // Curva matemática determinista
+            const curve = Math.sin(p.dist * 0.01 + r.trackSeed) * 0.5 + Math.sin(p.dist * 0.003 + r.trackSeed) * 0.2;
             
-            // Proyectar sobre vectores de la pista
-            // Dot Product manual
-            const fwd = mx * curve.tangent.x + mz * curve.tangent.z;
-            const lat = mx * curve.right.x + mz * curve.right.z;
+            // Vectores locales 2D (X, Z)
+            const tx = Math.sin(curve); 
+            const tz = Math.cos(curve);
+            const rx = tz;              
+            const rz = -tx;             
 
-            p.trackDist += fwd;
-            p.lateralOffset += lat;
+            const mx = Math.sin(p.heading) * p.speed;
+            const mz = Math.cos(p.heading) * p.speed;
 
-            // Colisión Pared
-            if (Math.abs(p.lateralOffset) > WALL_LIMIT) {
-                p.lateralOffset = Math.sign(p.lateralOffset) * (WALL_LIMIT - 0.1);
-                p.manualSpeed *= 0.8;
-                // Rebote simple de ángulo
-                const roadAngle = Math.atan2(curve.tangent.x, curve.tangent.z);
-                p.worldHeading = roadAngle - (p.worldHeading - roadAngle) * 0.5;
+            // Proyección
+            const fwd = mx * tx + mz * tz;
+            const lat = mx * rx + mz * rz;
+
+            p.dist += fwd;
+            p.lat += lat;
+
+            // 4. Colisiones Muros
+            if (Math.abs(p.lat) > WALL_LIMIT) {
+                p.lat = Math.sign(p.lat) * (WALL_LIMIT - 0.1);
+                p.speed *= 0.8;
+                // Rebote de ángulo
+                const roadHeading = curve; 
+                const rel = p.heading - roadHeading;
+                p.heading = roadHeading - (rel * 0.5); 
             }
 
-            pack.push({
+            // Datos mínimos para enviar por red (optimización ancho de banda)
+            updatePack.push({
                 id: p.id,
-                dist: p.trackDist,
-                lat: p.lateralOffset,
-                heading: p.worldHeading,
-                speed: p.manualSpeed,
-                color: p.color
+                d: parseFloat(p.dist.toFixed(2)),    // Distancia (2 decimales)
+                l: parseFloat(p.lat.toFixed(2)),     // Lateral
+                h: parseFloat(p.heading.toFixed(3)), // Ángulo
+                s: parseFloat(p.speed.toFixed(3)),   // Velocidad
+                c: p.color
             });
         }
-        io.to(rid).emit('gameState', pack);
+        
+        // Enviar estado comprimido a la sala
+        io.to(rid).emit('u', updatePack);
     }
-}, 1000/60);
+}, 1000 / 60);
 
-server.listen(3000, () => {
-    console.log('✅ SERVIDOR LISTO: Abre http://localhost:3000 en tu navegador');
+// Puerto dinámico para Render/Heroku
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 SERVIDOR ONLINE en puerto ${PORT}`);
 });
