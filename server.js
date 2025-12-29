@@ -13,17 +13,17 @@ const io = new Server(server, {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const rooms = {};
+const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 io.on('connection', (socket) => {
     
-    // Crear Sala
     socket.on('createRoom', () => {
         const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
         rooms[roomId] = {
             id: roomId,
             players: {},
-            host: socket.id, // El creador manda en la configuración
-            config: { maxSpeed: 500, accel: 40 }, // Config por defecto
+            host: socket.id,
+            config: { maxSpeed: 500, accel: 40 },
             seed: Math.floor(Math.random() * 999999) + 1 
         };
         socket.emit('roomCreated', { 
@@ -35,7 +35,6 @@ io.on('connection', (socket) => {
         joinPlayer(socket, roomId);
     });
 
-    // Unirse
     socket.on('joinRoom', (roomId) => {
         if(!roomId) return;
         roomId = roomId.toUpperCase();
@@ -52,7 +51,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Listado
     socket.on('getRooms', () => {
         const list = [];
         for (const rid in rooms) {
@@ -64,21 +62,17 @@ io.on('connection', (socket) => {
         socket.emit('roomList', list);
     });
 
-    // Actualizar Configuración (Solo Host)
     socket.on('updateRoomConfig', (newConfig) => {
         const rid = socket.data.room;
         if(rid && rooms[rid] && rooms[rid].host === socket.id) {
             rooms[rid].config = { ...rooms[rid].config, ...newConfig };
-            // Emitir a todos en la sala la nueva config
             io.to(rid).emit('configUpdated', rooms[rid].config);
         }
     });
 
-    // Recepción de estado físico del cliente (Cliente Autoridad)
     socket.on('myState', (state) => {
         const rid = socket.data.room;
         if (rid && rooms[rid] && rooms[rid].players[socket.id]) {
-            // Guardamos el estado que el cliente calculó
             rooms[rid].players[socket.id].state = state;
         }
     });
@@ -95,15 +89,21 @@ io.on('connection', (socket) => {
 function joinPlayer(socket, roomId) {
     socket.data.room = roomId;
     socket.join(roomId);
+    
+    // Asignar Letra (A, B, C...)
+    const currentCount = Object.keys(rooms[roomId].players).length;
+    const letter = ALPHABET[currentCount % ALPHABET.length];
+    
     const hue = Math.floor(Math.random() * 360);
     rooms[roomId].players[socket.id] = {
         id: socket.id,
+        alias: letter,
         color: `hsl(${hue}, 100%, 50%)`,
-        state: { d: 0, l: 0, s: 0, h: 0 } // dist, lat, speed, heading
+        state: { d: 0, l: 0, s: 0, h: 0 } 
     };
 }
 
-// Bucle de Broadcast (60Hz)
+// Bucle Broadcast
 setInterval(() => {
     for (const rid in rooms) {
         const r = rooms[rid];
@@ -113,10 +113,11 @@ setInterval(() => {
             if(p.state) {
                 pack.push({
                     i: p.id,
-                    d: p.state.d, // Distancia
-                    l: p.state.l, // Lateral
-                    s: p.state.s, // Velocidad
-                    h: p.state.h, // Heading (Rotación real del coche)
+                    n: p.alias, // Nombre/Letra
+                    d: p.state.d,
+                    l: p.state.l,
+                    s: p.state.s,
+                    h: p.state.h,
                     c: p.color
                 });
             }
