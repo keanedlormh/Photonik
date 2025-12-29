@@ -11,17 +11,17 @@ const CONFIG = {
     ROAD_WIDTH_HALF: 9.0,
     WALL_WIDTH: 1.2,
     WALL_HEIGHT: 1.5,
-    ROAD_Y_OFFSET: 0.2, // Altura base de la carretera sobre el terreno
+    ROAD_Y_OFFSET: 0.2, 
     CHUNK_LENGTH: 100,
     VISIBLE_CHUNKS: 16,
-    WALL_LIMIT: 7.8 // Límite colisión lateral
+    WALL_LIMIT: 7.8 
 };
 
 const state = {
     inGame: false,
     myId: null,
     isHost: false,
-    players: {}, // { id: { mesh: Object3D, ... } }
+    players: {}, 
     
     // FÍSICAS (Cliente Autoridad)
     manualSpeed: 0.0,
@@ -32,13 +32,15 @@ const state = {
     // INPUTS
     input: { steer: 0, gas: false, brake: false },
     
-    // AJUSTES (Settings)
+    // AJUSTES
     settings: {
-        maxSpeed: 500,      // Controlado por Host
-        accel: 40,          // Controlado por Host
+        maxSpeed: 500,      // Host
+        accel: 40,          // Host
         sens: 60,           // Local
         stiffness: 50,      // Local
-        invertSteer: false  // Local - Invertir Giro
+        invertSteer: false, // Local
+        camDist: 18,        // Local
+        fpv: false          // Local
     },
     
     // GENERACIÓN
@@ -49,7 +51,6 @@ const state = {
 // ==========================================
 // 2. SISTEMA RNG DETERMINISTA
 // ==========================================
-// Necesario para que todos los jugadores generen la misma carretera
 function mulberry32(a) {
     return function() {
       var t = a += 0x6D2B79F5;
@@ -76,6 +77,7 @@ const ui = {
     menuBtn: document.getElementById('menu-btn'),
     menuModal: document.getElementById('menu-modal'),
     roomList: document.getElementById('room-list'),
+    brakeBtn: document.getElementById('brake-btn'),
     
     // Opciones Menú
     optMaxSpeed: document.getElementById('opt-max-speed'),
@@ -86,19 +88,19 @@ const ui = {
     dispSens: document.getElementById('disp-sens'),
     optStiff: document.getElementById('opt-stiff'),
     dispStiff: document.getElementById('disp-stiff'),
+    optCamDist: document.getElementById('opt-cam-dist'),
+    dispCamDist: document.getElementById('disp-cam-dist'),
+    
     hostControls: document.getElementById('host-controls'),
     adminBadge: document.getElementById('admin-badge'),
+    
+    // Checks
+    chkInvert: document.getElementById('chk-invert'),
+    chkShowBrake: document.getElementById('chk-show-brake'),
+    chkFPV: document.getElementById('chk-fpv'),
     chkFps: document.getElementById('chk-fps'),
     chkPing: document.getElementById('chk-ping')
 };
-
-// Añadir Checkbox para Invertir Giro al menú dinámicamente si no existe en HTML
-// Ojo: Asegúrate de añadir esto en tu HTML dentro del bloque "PILOTO (LOCAL)"
-// <div class="menu-option"><span>Invertir Giro</span><label class="switch"><input type="checkbox" id="chk-invert"><span class="slider"></span></label></div>
-const chkInvert = document.getElementById('chk-invert');
-if(chkInvert) {
-    chkInvert.onchange = (e) => { state.settings.invertSteer = e.target.checked; };
-}
 
 // Toggle Menú
 ui.menuBtn.onclick = () => {
@@ -106,7 +108,7 @@ ui.menuBtn.onclick = () => {
     ui.menuModal.style.display = isFlex ? 'none' : 'flex';
 };
 
-// Configuración Host (Sincronizada)
+// Listeners Configuración
 const sendConfig = () => {
     if(state.isHost && socket) {
         socket.emit('updateRoomConfig', {
@@ -118,9 +120,16 @@ const sendConfig = () => {
 ui.optMaxSpeed.oninput = (e) => { ui.dispMaxSpeed.innerText = e.target.value; sendConfig(); };
 ui.optAccel.oninput = (e) => { ui.dispAccel.innerText = e.target.value; sendConfig(); };
 
-// Configuración Local
 ui.optSens.oninput = (e) => { state.settings.sens = parseInt(e.target.value); ui.dispSens.innerText = state.settings.sens + '%'; };
 ui.optStiff.oninput = (e) => { state.settings.stiffness = parseInt(e.target.value); ui.dispStiff.innerText = state.settings.stiffness + '%'; };
+ui.optCamDist.oninput = (e) => { state.settings.camDist = parseInt(e.target.value); ui.dispCamDist.innerText = state.settings.camDist; };
+
+ui.chkInvert.onchange = (e) => { state.settings.invertSteer = e.target.checked; };
+ui.chkShowBrake.onchange = (e) => { ui.brakeBtn.style.display = e.target.checked ? 'flex' : 'none'; };
+ui.chkFPV.onchange = (e) => { 
+    state.settings.fpv = e.target.checked; 
+    updateCarVisibility();
+};
 ui.chkFps.onchange = (e) => { ui.fps.style.display = e.target.checked ? 'block' : 'none'; };
 ui.chkPing.onchange = (e) => { ui.ping.style.display = e.target.checked ? 'block' : 'none'; };
 
@@ -158,7 +167,6 @@ function setupSocket() {
     socket.on('roomCreated', d => startGame(d));
     socket.on('roomJoined', d => startGame(d));
     
-    // Sync Configuración
     socket.on('configUpdated', cfg => {
         state.settings.maxSpeed = cfg.maxSpeed;
         state.settings.accel = cfg.accel;
@@ -168,26 +176,20 @@ function setupSocket() {
         }
     });
 
-    // Actualización Físicas Remotas
     socket.on('u', (data) => { if(state.inGame) updateRemotePlayers(data); });
     socket.on('playerLeft', id => { 
         if(state.players[id]) { scene.remove(state.players[id].mesh); delete state.players[id]; } 
     });
 
-    // Ping (Cliente -> Servidor -> Cliente)
     setInterval(() => {
         const t = Date.now();
-        socket.emit('ping', () => { 
-            const latency = Date.now() - t;
-            ui.ping.innerText = `PING: ${latency}ms`; 
-        });
+        socket.emit('ping', () => { ui.ping.innerText = `PING: ${Date.now()-t}ms`; });
     }, 2000);
 }
 
 function startGame(data) {
     state.seed = data.seed;
     state.isHost = data.isHost;
-    
     state.settings.maxSpeed = data.config.maxSpeed;
     state.settings.accel = data.config.accel;
     
@@ -216,7 +218,7 @@ function startGame(data) {
 }
 
 // ==========================================
-// 4. MOTOR 3D (THREE.JS)
+// 4. MOTOR 3D
 // ==========================================
 let scene, camera, renderer, composer, chunks=[], smokeGroup, mainCar;
 let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
@@ -228,14 +230,10 @@ const matRoad = new THREE.MeshStandardMaterial({
     color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide,
     polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
 }); 
-const matWall = new THREE.MeshStandardMaterial({ 
-    color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide 
-});
-// Líneas con depthWrite:false para evitar z-fighting y orden de renderizado
+const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
 const matLineY = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide, depthWrite: false });
 const matLineW = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthWrite: false });
 const matTailLight = new THREE.MeshBasicMaterial({ color: 0xff0000 }); 
-
 const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.4, metalness: 0.1, flatShading: true });
 const matPillar = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
 const matLeaves = new THREE.MeshStandardMaterial({color: 0x2e7d32});
@@ -255,9 +253,6 @@ function initThreeJS() {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    
-    const oldCanvas = document.querySelector('canvas');
-    if(oldCanvas) oldCanvas.remove();
     document.body.appendChild(renderer.domElement);
 
     const rp = new RenderPass(scene, camera);
@@ -270,24 +265,29 @@ function initThreeJS() {
     
     smokeGroup = new THREE.Group(); scene.add(smokeGroup);
     
-    // Crear Coche Propio
     const hue = Math.floor(Math.random()*360);
     mainCar = createCar(`hsl(${hue}, 100%, 50%)`);
     scene.add(mainCar);
     
-    // Faros delanteros
     const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5);
     hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20);
     mainCar.add(hl); mainCar.add(hl.target);
 
-    // Inicializar Mundo Procedural
     chunks = [];
     state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
     for(let i=0; i<CONFIG.VISIBLE_CHUNKS; i++) spawnChunk();
 
-    // Orientación inicial correcta
     const startData = getTrackData(0);
     if(startData) state.worldHeading = Math.atan2(startData.tan.x, startData.tan.z);
+}
+
+function updateCarVisibility() {
+    if(!mainCar) return;
+    const visible = !state.settings.fpv;
+    mainCar.children.forEach(child => {
+        // Ocultar mallas (carrocería, ruedas) pero mantener luces (SpotLight, PointLight)
+        if(child.isMesh) child.visible = visible;
+    });
 }
 
 function setupEnvironment() {
@@ -315,7 +315,7 @@ function setupEnvironment() {
 }
 
 // ==========================================
-// 5. GENERACIÓN PROCEDURAL (CHUNKS)
+// 5. GENERACIÓN PROCEDURAL
 // ==========================================
 const noisePerm = new Uint8Array(512); const p = new Uint8Array(256);
 for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
@@ -365,98 +365,49 @@ class Chunk {
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
         
-        const rV = [], rI = []; 
-        const wV = [], wI = []; 
-        const lV = [], lI = []; 
-        const yV = [], yI = []; 
-
+        const rV=[], rI=[], wV=[], wI=[], lV=[], lI=[], yV=[], yI=[]; 
         const lineYOffset = CONFIG.ROAD_Y_OFFSET + 0.15; 
 
         for(let i=0; i<=div; i++) {
             const p = pts[i]; const n = frames.binormals[i]; 
-            
-            // 1. CARRETERA (Continuous Ribbon)
-            rV.push(
-                p.x + n.x * CONFIG.ROAD_WIDTH_HALF, p.y + CONFIG.ROAD_Y_OFFSET, p.z + n.z * CONFIG.ROAD_WIDTH_HALF,
-                p.x - n.x * CONFIG.ROAD_WIDTH_HALF, p.y + CONFIG.ROAD_Y_OFFSET, p.z - n.z * CONFIG.ROAD_WIDTH_HALF
-            );
+            rV.push(p.x + n.x * CONFIG.ROAD_WIDTH_HALF, p.y + CONFIG.ROAD_Y_OFFSET, p.z + n.z * CONFIG.ROAD_WIDTH_HALF, p.x - n.x * CONFIG.ROAD_WIDTH_HALF, p.y + CONFIG.ROAD_Y_OFFSET, p.z - n.z * CONFIG.ROAD_WIDTH_HALF);
 
-            // 2. MUROS LATERALES (Solid Box)
             const yTop = p.y + CONFIG.ROAD_Y_OFFSET + CONFIG.WALL_HEIGHT;
             const yBot = p.y - 2.0;
-            
-            // Left
             const L_In = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
             const L_Out = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH));
             wV.push(L_In.x, yTop, L_In.z, L_In.x, yBot, L_In.z, L_Out.x, yTop, L_Out.z, L_Out.x, yBot, L_Out.z);
-            
-            // Right
             const R_In = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
             const R_Out = p.clone().add(n.clone().multiplyScalar(-(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH)));
             wV.push(R_In.x, yTop, R_In.z, R_In.x, yBot, R_In.z, R_Out.x, yTop, R_Out.z, R_Out.x, yBot, R_Out.z);
 
-            // 3. LÍNEAS
-            const distL = CONFIG.ROAD_WIDTH_HALF - 0.8;
-            const sw = 0.4;
-            // Left White
+            const distL = CONFIG.ROAD_WIDTH_HALF - 0.8; const sw = 0.4;
             lV.push(p.x + n.x * distL, p.y + lineYOffset, p.z + n.z * distL); 
             lV.push(p.x + n.x * (distL+sw), p.y + lineYOffset, p.z + n.z * (distL+sw));
-            // Right White
             lV.push(p.x - n.x * distL, p.y + lineYOffset, p.z - n.z * distL);
             lV.push(p.x - n.x * (distL+sw), p.y + lineYOffset, p.z - n.z * (distL+sw));
-            // Central Yellow
+
             const lw = 0.2;
             yV.push(p.x + n.x * lw, p.y + lineYOffset, p.z + n.z * lw);
             yV.push(p.x - n.x * lw, p.y + lineYOffset, p.z - n.z * lw);
         }
 
-        // Indices
         for(let i=0; i<div; i++) {
             const r = i * 2; rI.push(r, r+2, r+1, r+1, r+2, r+3);
             const w = i * 8; 
-            // Left Wall (In, Out)
-            wI.push(w+0, w+8, w+2, w+2, w+8, w+10); // Top
-            wI.push(w+0, w+1, w+8, w+1, w+9, w+8); // In
-            wI.push(w+2, w+10, w+3, w+3, w+10, w+11); // Out
-            // Right Wall
-            wI.push(w+4, w+6, w+12, w+12, w+6, w+14);
-            wI.push(w+4, w+12, w+5, w+5, w+12, w+13);
-            wI.push(w+6, w+7, w+14, w+7, w+15, w+14);
-
+            wI.push(w+0, w+8, w+2, w+2, w+8, w+10); wI.push(w+0, w+1, w+8, w+1, w+9, w+8); wI.push(w+2, w+10, w+3, w+3, w+10, w+11);
+            wI.push(w+4, w+6, w+12, w+12, w+6, w+14); wI.push(w+4, w+12, w+5, w+5, w+12, w+13); wI.push(w+6, w+7, w+14, w+7, w+15, w+14);
             const l = i * 4;
-            lI.push(l, l+4, l+1, l+1, l+4, l+5);
-            lI.push(l+2, l+6, l+3, l+3, l+6, l+7);
-
-            if (i % 2 === 0) {
-                const y = i * 2;
-                yI.push(y, y+2, y+1, y+1, y+2, y+3);
-            }
+            lI.push(l, l+4, l+1, l+1, l+4, l+5); lI.push(l+2, l+6, l+3, l+3, l+6, l+7);
+            if (i % 2 === 0) { const y = i * 2; yI.push(y, y+2, y+1, y+1, y+2, y+3); }
         }
 
-        // Meshes
-        const rG = new THREE.BufferGeometry();
-        rG.setAttribute('position', new THREE.Float32BufferAttribute(rV, 3));
-        rG.setIndex(rI); rG.computeVertexNormals();
-        const rM = new THREE.Mesh(rG, matRoad); 
-        rM.receiveShadow = true; this.group.add(rM);
-
-        const wG = new THREE.BufferGeometry();
-        wG.setAttribute('position', new THREE.Float32BufferAttribute(wV, 3));
-        wG.setIndex(wI); wG.computeVertexNormals();
-        const wM = new THREE.Mesh(wG, matWall);
-        wM.castShadow = true; wM.receiveShadow = true; this.group.add(wM);
-
-        const lG = new THREE.BufferGeometry();
-        lG.setAttribute('position', new THREE.Float32BufferAttribute(lV, 3));
-        lG.setIndex(lI);
-        this.group.add(new THREE.Mesh(lG, matLineW));
-
-        if(yI.length > 0) {
-            const yG = new THREE.BufferGeometry();
-            yG.setAttribute('position', new THREE.Float32BufferAttribute(yV, 3));
-            yG.setIndex(yI);
-            this.group.add(new THREE.Mesh(yG, matLineY));
-        }
+        const rG = new THREE.BufferGeometry(); rG.setAttribute('position', new THREE.Float32BufferAttribute(rV, 3)); rG.setIndex(rI); rG.computeVertexNormals();
+        const rM = new THREE.Mesh(rG, matRoad); rM.receiveShadow = true; this.group.add(rM);
+        const wG = new THREE.BufferGeometry(); wG.setAttribute('position', new THREE.Float32BufferAttribute(wV, 3)); wG.setIndex(wI); wG.computeVertexNormals();
+        const wM = new THREE.Mesh(wG, matWall); wM.castShadow = true; wM.receiveShadow = true; this.group.add(wM);
+        const lG = new THREE.BufferGeometry(); lG.setAttribute('position', new THREE.Float32BufferAttribute(lV, 3)); lG.setIndex(lI); this.group.add(new THREE.Mesh(lG, matLineW));
+        if(yI.length > 0) { const yG = new THREE.BufferGeometry(); yG.setAttribute('position', new THREE.Float32BufferAttribute(yV, 3)); yG.setIndex(yI); this.group.add(new THREE.Mesh(yG, matLineY)); }
     }
 
     buildTerrain() {
@@ -545,9 +496,6 @@ class Chunk {
     dispose() { scene.remove(this.group); this.group.traverse(o => { if(o.geometry) o.geometry.dispose(); }); }
 }
 
-// ==========================================
-// 6. UTILS GEOMETRÍA & COCHE
-// ==========================================
 function createGridGeometry(verts, colors, rows, cols) {
     const g = new THREE.BufferGeometry(); const idx = [];
     for(let i=0; i<rows; i++) for(let j=0; j<cols; j++) {
@@ -581,7 +529,6 @@ function createCar(colorStr) {
         car.add(createOutline(wGeo, 1.05).translateX(p[0]).translateY(0.4).translateZ(p[1]));
     });
     
-    // Luces Traseras
     const tlGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
     const tl1 = new THREE.Mesh(tlGeo, matTailLight); tl1.position.set(0.6, 0.7, -2.15); car.add(tl1);
     const tl2 = new THREE.Mesh(tlGeo, matTailLight); tl2.position.set(-0.6, 0.7, -2.15); car.add(tl2);
@@ -612,7 +559,7 @@ function getTrackData(dist) {
 }
 
 // ==========================================
-// 7. BUCLE PRINCIPAL (PHYSICS + RENDER)
+// 7. BUCLE PRINCIPAL
 // ==========================================
 let lastTime = performance.now();
 let frames = 0, lastFpsTime = 0;
@@ -644,15 +591,6 @@ function animate() {
         const baseSens = 0.02 + (state.settings.sens / 100.0) * 0.05; 
         const stiff = (state.settings.stiffness / 100.0) * 5.0; 
         const turnSens = baseSens / (1.0 + (state.manualSpeed * stiff));
-        
-        // GIRO (Natural por defecto, Invertible)
-        const invertFactor = state.settings.invertSteer ? -1 : 1;
-        // El joystick da positivo a la derecha. Queremos que el heading aumente a la derecha?
-        // En ThreeJS, rotar en Y positivo es girar a la izquierda (anti-horario).
-        // Por tanto, Joystick Derecha (+) debe RESTAR al heading.
-        // Pero el input.steer ya viene normalizado (-1 a 1). 
-        // Si input es positivo (derecha), queremos girar a la derecha visualmente -> rotY negativo.
-        // Entonces: steerDir = -input.steer
         
         let steerDir = -state.input.steer; 
         if(state.settings.invertSteer) steerDir *= -1;
@@ -689,12 +627,24 @@ function animate() {
             mainCar.position.copy(pos);
             mainCar.rotation.set(0, state.worldHeading, 0);
 
-            // CAMERA
+            // CAMERA LOGIC (NUEVA)
             const backVec = new THREE.Vector3(-Math.sin(state.worldHeading), 0, -Math.cos(state.worldHeading));
-            const camTarget = pos.clone().add(backVec.multiplyScalar(18));
-            camTarget.y += 7;
-            camera.position.lerp(camTarget, 0.1);
-            camera.lookAt(pos.clone().add(new THREE.Vector3(0, 2, 0)));
+            
+            // Si es FPV, distancia 0, altura baja. Si no, distancia slider, altura 7.
+            const targetDist = state.settings.fpv ? -0.5 : state.settings.camDist; 
+            const targetHeight = state.settings.fpv ? 2.5 : 7;
+            
+            const camTarget = pos.clone().add(backVec.multiplyScalar(targetDist));
+            camTarget.y += targetHeight;
+            
+            // FPV necesita ser más rígido (menos lerp) para que no maree tanto
+            const lerpFactor = state.settings.fpv ? 0.3 : 0.1;
+            camera.position.lerp(camTarget, lerpFactor);
+            
+            // En FPV miramos más lejos
+            const lookOffset = state.settings.fpv ? 50 : 0;
+            const lookTarget = pos.clone().add(new THREE.Vector3(0, 2, 0)).add(finalData.tan.multiplyScalar(lookOffset));
+            camera.lookAt(lookTarget);
 
             const distToEnd = chunks[chunks.length-1].endDist - state.trackDist;
             if(distToEnd < 600) spawnChunk();
