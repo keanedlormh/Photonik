@@ -37,7 +37,8 @@ const state = {
         maxSpeed: 500,      // Controlado por Host
         accel: 40,          // Controlado por Host
         sens: 60,           // Local
-        stiffness: 50       // Local
+        stiffness: 50,      // Local
+        invertSteer: false  // Local - Invertir Giro
     },
     
     // GENERACIÓN
@@ -90,6 +91,14 @@ const ui = {
     chkFps: document.getElementById('chk-fps'),
     chkPing: document.getElementById('chk-ping')
 };
+
+// Añadir Checkbox para Invertir Giro al menú dinámicamente si no existe en HTML
+// Ojo: Asegúrate de añadir esto en tu HTML dentro del bloque "PILOTO (LOCAL)"
+// <div class="menu-option"><span>Invertir Giro</span><label class="switch"><input type="checkbox" id="chk-invert"><span class="slider"></span></label></div>
+const chkInvert = document.getElementById('chk-invert');
+if(chkInvert) {
+    chkInvert.onchange = (e) => { state.settings.invertSteer = e.target.checked; };
+}
 
 // Toggle Menú
 ui.menuBtn.onclick = () => {
@@ -165,10 +174,13 @@ function setupSocket() {
         if(state.players[id]) { scene.remove(state.players[id].mesh); delete state.players[id]; } 
     });
 
-    // Ping
+    // Ping (Cliente -> Servidor -> Cliente)
     setInterval(() => {
         const t = Date.now();
-        socket.emit('ping', () => { ui.ping.innerText = `PING: ${Date.now()-t}ms`; });
+        socket.emit('ping', () => { 
+            const latency = Date.now() - t;
+            ui.ping.innerText = `PING: ${latency}ms`; 
+        });
     }, 2000);
 }
 
@@ -213,12 +225,13 @@ const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.Ba
 
 // MATERIALES
 const matRoad = new THREE.MeshStandardMaterial({ 
-    color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide 
+    color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
 }); 
 const matWall = new THREE.MeshStandardMaterial({ 
     color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide 
 });
-// Líneas con depthWrite:false para evitar z-fighting
+// Líneas con depthWrite:false para evitar z-fighting y orden de renderizado
 const matLineY = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide, depthWrite: false });
 const matLineW = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthWrite: false });
 const matTailLight = new THREE.MeshBasicMaterial({ color: 0xff0000 }); 
@@ -632,7 +645,19 @@ function animate() {
         const stiff = (state.settings.stiffness / 100.0) * 5.0; 
         const turnSens = baseSens / (1.0 + (state.manualSpeed * stiff));
         
-        state.worldHeading += (-state.input.steer) * turnSens * (state.manualSpeed * 30.0 * dt);
+        // GIRO (Natural por defecto, Invertible)
+        const invertFactor = state.settings.invertSteer ? -1 : 1;
+        // El joystick da positivo a la derecha. Queremos que el heading aumente a la derecha?
+        // En ThreeJS, rotar en Y positivo es girar a la izquierda (anti-horario).
+        // Por tanto, Joystick Derecha (+) debe RESTAR al heading.
+        // Pero el input.steer ya viene normalizado (-1 a 1). 
+        // Si input es positivo (derecha), queremos girar a la derecha visualmente -> rotY negativo.
+        // Entonces: steerDir = -input.steer
+        
+        let steerDir = -state.input.steer; 
+        if(state.settings.invertSteer) steerDir *= -1;
+
+        state.worldHeading += steerDir * turnSens * (state.manualSpeed * 30.0 * dt);
 
         const moveX = Math.sin(state.worldHeading) * state.manualSpeed;
         const moveZ = Math.cos(state.worldHeading) * state.manualSpeed;
@@ -747,8 +772,10 @@ function updateRemotePlayers(data) {
 const joyZone = document.getElementById('joystick-zone'); const joyKnob = document.getElementById('joystick-knob');
 let joyId = null; const joyCenter = { x: 0, width: 0 };
 function handleJoyMove(clientX) {
-    let dx = clientX - (joyCenter.x + joyCenter.width/2); dx = Math.max(-50, Math.min(50, dx));
-    joyKnob.style.transform = `translate(${dx - 25}px, -25px)`; state.input.steer = -(dx / 50);
+    let dx = clientX - (joyCenter.x + joyCenter.width/2);
+    dx = Math.max(-50, Math.min(50, dx));
+    joyKnob.style.transform = `translate(${dx - 25}px, -25px)`;
+    state.input.steer = -(dx / 50);
 }
 joyZone.addEventListener('touchstart', e => { e.preventDefault(); joyId = e.changedTouches[0].identifier; const rect = joyZone.getBoundingClientRect(); joyCenter.x = rect.left; joyCenter.width = rect.width; handleJoyMove(e.changedTouches[0].clientX); });
 joyZone.addEventListener('touchmove', e => { e.preventDefault(); for(let i=0; i<e.changedTouches.length; i++) if(e.changedTouches[i].identifier === joyId) handleJoyMove(e.changedTouches[i].clientX); });
