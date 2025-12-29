@@ -5,7 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // ==========================================
-// 0. SISTEMA DE DIAGNÓSTICO (DEBUG)
+// 0. SISTEMA DE DIAGNÓSTICO
 // ==========================================
 const debugUI = document.getElementById('debug-console');
 function log(msg, type='info') {
@@ -25,7 +25,7 @@ window.onerror = function(msg, url, line) {
 };
 
 // ==========================================
-// 1. CONFIGURACIÓN Y ESTADO
+// 1. CONFIGURACIÓN
 // ==========================================
 const CONFIG = {
     ROAD_WIDTH_HALF: 9.0,
@@ -57,7 +57,7 @@ const state = {
 };
 
 // ==========================================
-// 2. RNG (Corrección Aquí)
+// 2. RNG
 // ==========================================
 function mulberry32(a) {
     return function() {
@@ -67,14 +67,10 @@ function mulberry32(a) {
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     }
 }
-
-// DECLARACIÓN GLOBAL DE RNG (Faltaba esto)
 let rng = mulberry32(1); 
-
 function setSeed(s) { 
     log(`Semilla establecida: ${s}`);
     rng = mulberry32(s); 
-    // Regenerar ruido para que el terreno coincida
     initNoise();
 }
 
@@ -175,14 +171,13 @@ function startGame(data) {
         state.myLabel = data.label;
         state.settings.maxSpeed = data.config.maxSpeed;
         state.settings.accel = data.config.accel;
-        
         ui.optMaxSpeed.value = data.config.maxSpeed; ui.dispMaxSpeed.innerText = data.config.maxSpeed;
         ui.optAccel.value = data.config.accel; ui.dispAccel.innerText = data.config.accel;
 
         if(state.isHost) { ui.hostControls.classList.remove('disabled-opt'); ui.adminBadge.style.display = 'inline-block'; } 
         else { ui.hostControls.classList.add('disabled-opt'); ui.adminBadge.style.display = 'none'; }
 
-        setSeed(state.seed); // Esto ahora funcionará porque rng está definido
+        setSeed(state.seed);
         ui.lobby.style.display = 'none'; ui.loading.style.display = 'flex';
         
         log("Cargando Motor 3D...");
@@ -262,7 +257,8 @@ function setupEnvironment() {
     ambientLight = new THREE.AmbientLight(0x404040, 1.5); scene.add(ambientLight);
     sunLight = new THREE.DirectionalLight(0xffdf80, 2.5); sunLight.castShadow = true; 
     sunLight.shadow.mapSize.set(2048, 2048); sunLight.shadow.camera.far = 1000;
-    sunLight.shadow.camera.left = -500; sunLight.shadow.camera.right = 500; sunLight.shadow.camera.top = 500; sunLight.shadow.camera.bottom = -500;
+    sunLight.shadow.camera.left = -500; sunLight.shadow.camera.right = 500;
+    sunLight.shadow.camera.top = 500; sunLight.shadow.camera.bottom = -500;
     scene.add(sunLight);
     sunMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00, fog: false })); scene.add(sunMesh);
     moonLight = new THREE.DirectionalLight(0x88ccff, 3.0); scene.add(moonLight);
@@ -279,11 +275,9 @@ const noisePerm = new Uint8Array(512);
 const p = new Uint8Array(256);
 
 function initNoise() {
-    // Regenerar tabla de permutación con el RNG sembrado actual
     for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
     for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 }
-// Inicializar con ruido aleatorio por si acaso
 for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256);
 for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 
@@ -299,6 +293,7 @@ class Chunk {
         this.startDist = globalDist;
         this.group = new THREE.Group();
         this.clouds = [];
+        this.atmosphere = null;
         scene.add(this.group);
 
         const angleChange = (rng() - 0.5) * 0.5;
@@ -422,9 +417,10 @@ class Chunk {
             const y = getTerrainHeight(pos.x, pos.z);
             if(y > 0) {
                 const gr = new THREE.Group();
-                const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 10, 5), matWood); tr.position.y = 5;
-                const lv = new THREE.Mesh(new THREE.ConeGeometry(3.5, 9, 5), matLeaves); lv.position.y = 10;
-                gr.add(tr, lv); gr.position.set(pos.x, y - 2.0, pos.z); gr.scale.setScalar(0.8 + rng() * 0.5); gr.castShadow = true;
+                const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 12, 5), matWood); tr.position.y = 6;
+                const lv = new THREE.Mesh(new THREE.ConeGeometry(3.5, 9, 5), matLeaves); lv.position.y = 11;
+                gr.add(tr, lv); gr.position.set(pos.x, y - 4.0, pos.z); // HUNDIR 4M
+                gr.scale.setScalar(0.8 + rng() * 0.5); gr.castShadow = true;
                 this.group.add(gr);
             }
         }
@@ -458,6 +454,7 @@ class Chunk {
         pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
         const parts = new THREE.Points(pGeo, matAtmosphere);
         this.group.add(parts);
+        this.atmosphere = parts; // Guardar referencia
     }
 
     dispose() { scene.remove(this.group); this.group.traverse(o => { if(o.geometry) o.geometry.dispose(); }); }
@@ -526,7 +523,7 @@ function getTrackData(dist) {
 }
 
 // ==========================================
-// 6. BUCLE PRINCIPAL
+// 7. BUCLE PRINCIPAL
 // ==========================================
 let lastTime = performance.now();
 let frames = 0, lastFpsTime = 0;
@@ -587,7 +584,23 @@ function animate() {
         const tEnv = now * 0.00005; const carPos = mainCar.position;
         sunLight.position.set(carPos.x + Math.cos(tEnv)*1500, Math.sin(tEnv)*1500, carPos.z); sunLight.target.position.copy(carPos);
         moonLight.position.set(carPos.x - Math.cos(tEnv)*1500, -Math.sin(tEnv)*1500, carPos.z);
-        chunks.forEach(c => c.clouds.forEach(cl => cl.position.z += 0.2));
+        
+        // --- MOVER NUBES Y ATMÓSFERA ---
+        chunks.forEach(c => {
+            // Nubes
+            c.clouds.forEach(cl => cl.position.z += 0.2);
+            // Atmósfera
+            if(c.atmosphere) {
+                const posAttr = c.atmosphere.geometry.attributes.position;
+                const arr = posAttr.array;
+                // Movemos partículas lentamente en Z
+                for(let i=2; i<arr.length; i+=3) {
+                    arr[i] += 0.05; // Movimiento lento +Z (Sur)
+                    // Reset simple si se van muy lejos (opcional, aquí solo drift)
+                }
+                posAttr.needsUpdate = true;
+            }
+        });
         
         const sin = Math.sin(tEnv); let target = new THREE.Color(); let opStars = 0;
         if (sin < -0.4) { target.copy(COLORS.night); opStars = 1; } else if (sin < 0.1) { const t=(sin+0.4)/0.5; target.copy(COLORS.night).lerp(COLORS.dawn, t); opStars=1-t; } else if (sin < 0.4) { const t=(sin-0.1)/0.3; target.copy(COLORS.dawn).lerp(COLORS.day, t); opStars=0; } else if (sin < 0.8) { target.copy(COLORS.day); opStars=0; } else { const t=(sin-0.8)/0.2; target.copy(COLORS.day).lerp(COLORS.dusk, t); opStars=t*0.5; }
