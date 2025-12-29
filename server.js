@@ -25,7 +25,7 @@ io.on('connection', (socket) => {
             host: socket.id,
             config: { maxSpeed: 500, accel: 40 },
             seed: Math.floor(Math.random() * 999999) + 1,
-            count: 0
+            count: 0 // Contador para asignar letras A, B, C...
         };
         const pInfo = joinPlayer(socket, roomId);
         socket.emit('roomCreated', { 
@@ -33,8 +33,7 @@ io.on('connection', (socket) => {
             seed: rooms[roomId].seed,
             isHost: true,
             config: rooms[roomId].config,
-            label: pInfo.label,
-            color: pInfo.color // <--- ENVIAMOS COLOR ASIGNADO
+            label: pInfo.label // Enviamos su nombre al creador
         });
     });
 
@@ -49,8 +48,7 @@ io.on('connection', (socket) => {
                 seed: rooms[roomId].seed,
                 isHost: false,
                 config: rooms[roomId].config,
-                label: pInfo.label,
-                color: pInfo.color // <--- ENVIAMOS COLOR ASIGNADO
+                label: pInfo.label // Enviamos su nombre al unirse
             });
         } else {
             socket.emit('errorMsg', 'Sala no encontrada');
@@ -105,12 +103,11 @@ function joinPlayer(socket, roomId) {
     const label = `PLAYER ${letter}`;
     rooms[roomId].count++;
 
-    // Color Aleatorio Fijo
     const hue = Math.floor(Math.random() * 360);
     const pData = {
         id: socket.id,
         label: label,
-        color: `hsl(${hue}, 100%, 50%)`, // Color persistente
+        color: `hsl(${hue}, 100%, 50%)`,
         state: { d: 0, l: 0, s: 0, h: 0 }
     };
     
@@ -128,7 +125,7 @@ setInterval(() => {
             if(p.state) {
                 pack.push({
                     i: p.id,
-                    n: p.label,
+                    n: p.label, // Nombre (Player A)
                     d: p.state.d,
                     l: p.state.l,
                     s: p.state.s,
