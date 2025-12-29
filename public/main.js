@@ -29,7 +29,7 @@ const state = {
 };
 
 // ==========================================
-// SISTEMA RNG
+// RNG DETERMINISTA
 // ==========================================
 function mulberry32(a) {
     return function() {
@@ -124,27 +124,22 @@ let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = []; const smokeGroup = new THREE.Group();
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
-// MATERIALES REFINADOS
+// MATERIALES (Asfalto perfecto)
 const matRoad = new THREE.MeshStandardMaterial({ 
-    color: 0x080808, // Negro asfalto profundo
-    roughness: 0.6,  // Un poco más liso para reflejos suaves
-    metalness: 0.1,
-    flatShading: false // IMPORTANTE: Sombreado suave
+    color: 0x0a0a0a, // Negro profundo
+    roughness: 0.9,  // Muy rugoso para evitar brillos especulares (grid effect)
+    metalness: 0.0,
+    flatShading: false 
 }); 
-const matWall = new THREE.MeshStandardMaterial({ 
-    color: 0xaaaaaa, 
-    roughness: 0.4, 
-    metalness: 0.1,
-    flatShading: false // IMPORTANTE: Muros curvos suaves
-});
+const matWall = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.5, metalness: 0.1 });
 const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffaa00 }); 
 const matLineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
 const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.2, metalness: 0.6, flatShading: true });
 const matPillar = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.9 });
-const matLeaves = new THREE.MeshStandardMaterial({color: 0x1b5e20, flatShading: true}); // Low poly look para arboles
+const matLeaves = new THREE.MeshStandardMaterial({color: 0x1b5e20, flatShading: true});
 const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723, flatShading: true });
 const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdddddd, emissiveIntensity: 0.1, flatShading: true });
-const matAtmosphere = new THREE.PointsMaterial({ size: 0.3, color: 0xffffff, transparent: true, opacity: 0.3, sizeAttenuation: true });
+const matAtmosphere = new THREE.PointsMaterial({ size: 0.4, color: 0xffffff, transparent: true, opacity: 0.3 });
 
 function initThreeJS() {
     scene = new THREE.Scene();
@@ -202,7 +197,7 @@ function setupEnvironment() {
 }
 
 // ==========================================
-// GENERACIÓN PROCEDURAL (SMOOTH SHADING)
+// GENERACIÓN PROCEDURAL (GRID BASED SMOOTH)
 // ==========================================
 const noisePerm = new Uint8Array(512); const p = new Uint8Array(256);
 for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
@@ -247,105 +242,92 @@ class Chunk {
     }
 
     buildStructure() {
-        // Mayor subdivisión para curvas más suaves
-        const div = 30; 
+        const div = 30; // Subdivisión longitudinal (suavidad curva)
+        const divW = 10; // Subdivisión TRANSVERSAL (clave para superficie plana y suave)
+        
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
         
-        // 1. CARRETERA SUAVE (Shared Vertices)
-        // Generamos vértices Izquierda y Derecha para cada paso.
-        // Total vértices = (div + 1) * 2
+        // 1. CARRETERA SUAVE (Grid Mesh)
+        // Generamos una malla de div x divW puntos para que la luz fluya
         const roadVerts = [];
+        
         for(let i=0; i<=div; i++) {
             const p = pts[i]; 
             const n = frames.binormals[i];
             
-            // Izquierda
-            roadVerts.push(p.x + n.x * CONFIG.ROAD_WIDTH_HALF, p.y, p.z + n.z * CONFIG.ROAD_WIDTH_HALF);
-            // Derecha
-            roadVerts.push(p.x - n.x * CONFIG.ROAD_WIDTH_HALF, p.y, p.z - n.z * CONFIG.ROAD_WIDTH_HALF);
+            for(let j=0; j<=divW; j++) {
+                // Interpolamos de izquierda (-ROAD_WIDTH) a derecha (+ROAD_WIDTH)
+                // u va de -1 a 1
+                const u = (j / divW) * 2 - 1; 
+                const offset = u * CONFIG.ROAD_WIDTH_HALF;
+                
+                roadVerts.push(p.x - n.x * offset, p.y, p.z - n.z * offset);
+            }
         }
-        const roadGeo = createContinuousMesh(roadVerts, div, 2);
+
+        // rows=div, cols=divW+1 (puntos transversales)
+        const roadGeo = createContinuousMesh(roadVerts, div, divW + 1);
         const roadMesh = new THREE.Mesh(roadGeo, matRoad);
         roadMesh.receiveShadow = true;
         this.group.add(roadMesh);
 
-        // 2. MUROS SUAVES
-        // Cada muro es una tira.
+        // 2. MUROS LATERALES
         this.createSmoothWall(pts, frames, 1); // Izq
         this.createSmoothWall(pts, frames, -1); // Der
 
-        // 3. LÍNEAS (Dash simple)
+        // 3. LÍNEAS
         this.createRoadLines(pts, frames);
     }
 
     createSmoothWall(pts, frames, side) {
-        // Generamos 3 tiras continuas: Inner, Top, Outer
-        // Para que sea "Smooth" a lo largo de la curva pero "Hard" en las esquinas del muro,
-        // necesitamos geometrías separadas o usar split vertices. Usaremos geometrías separadas por cara para simplicidad y corrección de shading.
-        
+        // Tiras simples (cols=2) para los muros, ya que son planos verticales
         const h = CONFIG.WALL_HEIGHT;
         const w = CONFIG.WALL_WIDTH;
         const div = pts.length - 1;
 
-        // -- TOP FACE (Cara Superior) --
+        // -- TOP FACE --
         const topVerts = [];
         for(let i=0; i<=div; i++) {
             const p = pts[i]; const n = frames.binormals[i].clone().multiplyScalar(side);
-            // Inner Point
             topVerts.push(p.x + n.x * CONFIG.ROAD_WIDTH_HALF, p.y + h, p.z + n.z * CONFIG.ROAD_WIDTH_HALF);
-            // Outer Point
             topVerts.push(p.x + n.x * (CONFIG.ROAD_WIDTH_HALF + w), p.y + h, p.z + n.z * (CONFIG.ROAD_WIDTH_HALF + w));
         }
-        const topGeo = createContinuousMesh(topVerts, div, 2);
-        const topMesh = new THREE.Mesh(topGeo, matWall);
+        const topMesh = new THREE.Mesh(createContinuousMesh(topVerts, div, 2), matWall);
         topMesh.castShadow = true; topMesh.receiveShadow = true;
         this.group.add(topMesh);
 
-        // -- INNER FACE (Cara Interna) --
+        // -- INNER FACE --
         const innerVerts = [];
         for(let i=0; i<=div; i++) {
             const p = pts[i]; const n = frames.binormals[i].clone().multiplyScalar(side);
             const x = p.x + n.x * CONFIG.ROAD_WIDTH_HALF;
             const z = p.z + n.z * CONFIG.ROAD_WIDTH_HALF;
-            // Top
             innerVerts.push(x, p.y + h, z);
-            // Bottom (Extendemos un poco hacia abajo para tapar huecos)
             innerVerts.push(x, p.y - 0.5, z);
         }
-        const innerGeo = createContinuousMesh(innerVerts, div, 2);
-        const innerMesh = new THREE.Mesh(innerGeo, matWall);
+        const innerMesh = new THREE.Mesh(createContinuousMesh(innerVerts, div, 2), matWall);
         innerMesh.receiveShadow = true;
         this.group.add(innerMesh);
 
-        // -- OUTER FACE (Cara Externa) --
+        // -- OUTER FACE --
         const outerVerts = [];
         for(let i=0; i<=div; i++) {
             const p = pts[i]; const n = frames.binormals[i].clone().multiplyScalar(side);
             const x = p.x + n.x * (CONFIG.ROAD_WIDTH_HALF + w);
             const z = p.z + n.z * (CONFIG.ROAD_WIDTH_HALF + w);
-            // Top
             outerVerts.push(x, p.y + h, z);
-            // Bottom
             outerVerts.push(x, p.y - 0.5, z);
         }
-        const outerGeo = createContinuousMesh(outerVerts, div, 2);
-        // Invertimos índices para que mire hacia afuera? createContinuousMesh asume orden strip.
-        // Si el orden de vértices cruza la normal, se verá negro. Ajustaremos el material a DoubleSide si es necesario o el orden de push.
-        // Para outer, el orden estándar debería funcionar si la cámara está fuera, pero queremos que se vea bien.
-        // matWall es standard, así que culling importa.
-        // Solución simple: Side = DoubleSide para los muros laterales para evitar líos de winding order en curvas complejas.
-        const matWallDouble = matWall.clone(); 
-        matWallDouble.side = THREE.DoubleSide;
-        
-        const outerMesh = new THREE.Mesh(outerGeo, matWallDouble);
+        const matWallDouble = matWall.clone(); matWallDouble.side = THREE.DoubleSide;
+        const outerMesh = new THREE.Mesh(createContinuousMesh(outerVerts, div, 2), matWallDouble);
         outerMesh.castShadow = true;
         this.group.add(outerMesh);
     }
 
     createRoadLines(pts, frames) {
         const cV = [], sV = [];
-        const lw = 0.2, sw = 0.3, yOff = 0.05, dist = CONFIG.ROAD_WIDTH_HALF - 0.8;
+        const lw = 0.2, sw = 0.3, yOff = 0.02, dist = CONFIG.ROAD_WIDTH_HALF - 0.8;
         for(let i=0; i<pts.length-1; i++) {
             const p1 = pts[i]; const n1 = frames.binormals[i]; const p2 = pts[i+1]; const n2 = frames.binormals[i+1];
             if(i % 2 === 0) {
@@ -401,7 +383,6 @@ class Chunk {
                 this.group.add(pil);
             }
         }
-        // Árboles
         for(let i=0; i<8; i++) {
             const t = rng(); const side = rng() > 0.5 ? 1 : -1; const dist = CONFIG.ROAD_WIDTH_HALF + 15 + rng() * 60;
             const p = this.curve.getPointAt(t); const tan = this.curve.getTangentAt(t);
@@ -419,10 +400,9 @@ class Chunk {
     }
 
     buildClouds() {
-        // MÁS NUBES (Probabilidad aumentada a > 0.2)
         if (rng() > 0.2) { 
             const cloud = new THREE.Group();
-            const segs = 4 + Math.floor(rng() * 5); // Nubes más complejas
+            const segs = 4 + Math.floor(rng() * 5); 
             for(let i=0; i<segs; i++) {
                 const size = 6 + rng() * 10;
                 const m = new THREE.Mesh(new THREE.DodecahedronGeometry(size, 0), matCloud);
@@ -437,7 +417,6 @@ class Chunk {
     }
 
     buildAtmosphere() {
-        // MUCHAS MÁS PARTÍCULAS (x5)
         const pGeo = new THREE.BufferGeometry();
         const pPos = [];
         const count = 250; 
@@ -459,37 +438,29 @@ class Chunk {
 }
 
 // ==========================================
-// UTILS GEOMETRÍA CONTINUA (SMOOTH)
+// UTILS GEOMETRÍA CONTINUA (SMOOTH & GRID)
 // ==========================================
-// Crea una malla continua tipo "Triangle Strip" indexado
-// verts: Array plano [x1,y1,z1, x2,y2,z2...]
-// rows: Número de segmentos a lo largo de la curva
-// cols: Número de vértices transversales (Para carretera es 2: Izq y Der)
+// rows: longitud (segments), cols: ancho (width segments + 1)
 function createContinuousMesh(verts, rows, cols) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
     
     const indices = [];
-    // Generar índices para conectar la rejilla
-    // Si cols=2 (Road): 
-    // 0 -- 2 -- 4
-    // |  / |  / |
-    // 1 -- 3 -- 5
+    // Conectar Grid:
+    // i va por filas (longitud), j va por columnas (ancho)
     for(let i=0; i<rows; i++) {
         for(let j=0; j<cols-1; j++) {
-            // Indices de los 4 vértices del quad
-            const a = i * cols + j;
-            const b = (i + 1) * cols + j;
-            const c = (i + 1) * cols + (j + 1);
-            const d = i * cols + (j + 1);
+            const a = i * cols + j;       // Top-Left
+            const b = (i + 1) * cols + j; // Bottom-Left
+            const c = (i + 1) * cols + (j + 1); // Bottom-Right
+            const d = i * cols + (j + 1); // Top-Right
             
-            // Dos triángulos por quad
             indices.push(a, b, d);
             indices.push(b, c, d);
         }
     }
     geo.setIndex(indices);
-    geo.computeVertexNormals(); // ESTO ES LA CLAVE PARA EL SMOOTH SHADING
+    geo.computeVertexNormals(); // Suavizado real
     return geo;
 }
 
