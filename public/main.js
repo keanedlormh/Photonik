@@ -54,7 +54,15 @@ const ui = {
     game: document.getElementById('game-ui'),
     roomList: document.getElementById('room-list'),
     speed: document.getElementById('speed-display'),
-    ping: document.getElementById('ping')
+    ping: document.getElementById('ping'),
+    menuBtn: document.getElementById('menu-btn'),
+    menuModal: document.getElementById('menu-modal')
+};
+
+// MENÚ TOGGLE
+ui.menuBtn.onclick = () => {
+    const isFlex = ui.menuModal.style.display === 'flex';
+    ui.menuModal.style.display = isFlex ? 'none' : 'flex';
 };
 
 document.getElementById('btn-connect').onclick = initNetwork;
@@ -67,23 +75,24 @@ document.getElementById('btn-join').onclick = () => {
 window.joinRoomId = (id) => socket.emit('joinRoom', id);
 
 function initNetwork() {
-    document.getElementById('status').innerText = "Conectando...";
+    document.getElementById('status').innerText = "ESTABLECIENDO ENLACE NEURONAL...";
+    document.getElementById('status').style.color = "#0af";
     socket = io();
 
     socket.on('connect', () => {
         state.myId = socket.id;
         ui.login.style.display = 'none';
-        ui.lobby.style.display = 'block';
+        ui.lobby.style.display = 'flex'; // Usamos flex para centrar
         socket.emit('getRooms');
     });
 
     socket.on('roomList', (list) => {
         ui.roomList.innerHTML = '';
-        if(list.length === 0) ui.roomList.innerHTML = '<div style="padding:10px;">No hay salas.</div>';
+        if(list.length === 0) ui.roomList.innerHTML = '<div style="padding:10px; font-style:italic; color:#666;">NO SE DETECTAN SEÑALES DE CARRERA.</div>';
         list.forEach(r => {
             ui.roomList.innerHTML += `<div class="room-item">
-                <span>SALA <b>${r.id}</b> <small>(${r.players})</small></span>
-                <button class="main-btn secondary" onclick="window.joinRoomId('${r.id}')" style="width:80px;">ENTRAR</button>
+                <span>SALA <b>${r.id}</b> <small>(${r.players}/8)</small></span>
+                <button class="main-btn secondary" onclick="window.joinRoomId('${r.id}')" style="width:80px; padding:8px; font-size:0.7rem;">ENTRAR</button>
             </div>`;
         });
     });
@@ -259,8 +268,7 @@ class Chunk {
         const lV = [], lI = []; 
         const yV = [], yI = []; 
 
-        // ELEVACIÓN SIGNIFICATIVA PARA LÍNEAS (Evita Z-Fighting)
-        const lineYOffset = CONFIG.ROAD_Y_OFFSET + 0.15; // +15cm sobre asfalto
+        const lineYOffset = CONFIG.ROAD_Y_OFFSET + 0.15; 
 
         for(let i=0; i<=div; i++) {
             const p = pts[i]; const n = frames.binormals[i]; 
@@ -281,7 +289,7 @@ class Chunk {
             const R_Out = p.clone().add(n.clone().multiplyScalar(-(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH)));
             wV.push(R_In.x, yTop, R_In.z, R_In.x, yBot, R_In.z, R_Out.x, yTop, R_Out.z, R_Out.x, yBot, R_Out.z);
 
-            // 3. LÍNEAS LATERALES BLANCAS (Ancho 0.4)
+            // 3. LÍNEAS LATERALES BLANCAS
             const distL = CONFIG.ROAD_WIDTH_HALF - 0.8;
             const sw = 0.4;
             lV.push(p.x + n.x * distL, p.y + lineYOffset, p.z + n.z * distL); 
@@ -289,7 +297,7 @@ class Chunk {
             lV.push(p.x - n.x * distL, p.y + lineYOffset, p.z - n.z * distL);
             lV.push(p.x - n.x * (distL+sw), p.y + lineYOffset, p.z - n.z * (distL+sw));
 
-            // 4. LÍNEA CENTRAL AMARILLA (Ancho 0.2)
+            // 4. LÍNEA CENTRAL AMARILLA
             const lw = 0.2;
             yV.push(p.x + n.x * lw, p.y + lineYOffset, p.z + n.z * lw);
             yV.push(p.x - n.x * lw, p.y + lineYOffset, p.z - n.z * lw);
@@ -377,7 +385,7 @@ class Chunk {
                 this.group.add(pil);
             }
         }
-        // DOBLE DE ÁRBOLES (20 por chunk)
+        // DOBLE DE ÁRBOLES
         for(let i=0; i<20; i++) {
             const t = rng(); const side = rng() > 0.5 ? 1 : -1; const dist = CONFIG.ROAD_WIDTH_HALF + 15 + rng() * 60;
             const p = this.curve.getPointAt(t); const tan = this.curve.getTangentAt(t);
@@ -385,17 +393,14 @@ class Chunk {
             const pos = p.clone().add(bin.multiplyScalar(side * dist));
             const y = getTerrainHeight(pos.x, pos.z);
             
-            // Solo plantar si es terreno sólido
             if(y > 0) {
                 const gr = new THREE.Group();
-                // Tronco más largo (Altura 10)
                 const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 10, 5), matWood); 
-                tr.position.y = 5; // Centro en 5 para que base esté en 0
+                tr.position.y = 5; 
                 const lv = new THREE.Mesh(new THREE.ConeGeometry(3.5, 9, 5), matLeaves); 
                 lv.position.y = 10;
                 
                 gr.add(tr, lv); 
-                // Hundir el árbol 2 metros bajo tierra para evitar que flote en pendientes
                 gr.position.set(pos.x, y - 2.0, pos.z); 
                 gr.scale.setScalar(0.8 + rng() * 0.5); 
                 gr.castShadow = true;
