@@ -31,7 +31,8 @@ const CONFIG = {
     WALL_WIDTH: 1.2,
     WALL_HEIGHT: 1.5,
     ROAD_Y_OFFSET: 0.2, 
-    CHUNK_LENGTH: 100,
+    CHUNK_LENGTH: 100, // Longitud base, puede variar dinámicamente
+    TERRAIN_WIDTH: 1000, // Ancho duplicado
     VISIBLE_CHUNKS: 16,
     WALL_LIMIT: 7.8 
 };
@@ -54,7 +55,8 @@ const state = {
         pcMode: false, hideArrows: false
     },
     seed: 1234,
-    worldGenState: { point: new THREE.Vector3(0, 4, 0), angle: 0, dist: 0 }
+    // Añadimos 'bias' para recordar la tendencia de giro y evitar círculos
+    worldGenState: { point: new THREE.Vector3(0, 4, 0), angle: 0, dist: 0, curvatureBias: 0 }
 };
 
 // ==========================================
@@ -80,9 +82,8 @@ const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
 const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdddddd, emissiveIntensity: 0.2, flatShading: true });
 const matAtmosphere = new THREE.PointsMaterial({ size: 0.4, color: 0xffffff, transparent: true, opacity: 0.3 });
 
-
 // ==========================================
-// 3. RNG & NOISE & HELPERS (DEFINICIONES PREVIAS)
+// 3. RNG & NOISE & HELPERS
 // ==========================================
 const noisePerm = new Uint8Array(512); 
 const p = new Uint8Array(256);
@@ -102,7 +103,6 @@ function initNoise() {
     for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
     for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 }
-// Init fallback
 for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256);
 for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 
@@ -116,7 +116,7 @@ const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
 const lerpFn = (t, a, b) => a + t * (b - a);
 const grad = (hash, x, y, z) => { const h = hash & 15; const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z; return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v); };
 const noise = (x, y) => { const X = Math.floor(x) & 255, Y = Math.floor(y) & 255; x -= Math.floor(x); y -= Math.floor(y); const u = fade(x), v = fade(y); const A = noisePerm[X] + Y, B = noisePerm[X + 1] + Y; return lerpFn(v, lerpFn(u, grad(noisePerm[A], x, y, 0), grad(noisePerm[B], x - 1, y, 0)), lerpFn(u, grad(noisePerm[A + 1], x, y - 1, 0), grad(noisePerm[B + 1], x - 1, y - 1, 0))); };
-function getTerrainHeight(x, z) { return noise(x*0.012, z*0.012)*30 + noise(x*0.04, z*0.04)*6; }
+function getTerrainHeight(x, z) { return noise(x*0.008, z*0.008)*40 + noise(x*0.03, z*0.03)*8; } // Terreno más amplio
 
 // --- UTILS GEOMETRÍA ---
 function createGridGeometry(verts, colors, rows, cols) {
@@ -163,7 +163,7 @@ function createCar(colorStr) {
     return car;
 }
 
-// --- CLASE CHUNK ---
+// --- CLASE CHUNK CON ALGORITMO RALLY ---
 class Chunk {
     constructor(idx, startP, startA, globalDist) {
         this.index = idx;
@@ -173,24 +173,77 @@ class Chunk {
         this.atmosphere = null;
         scene.add(this.group);
 
-        const angleChange = (rng() - 0.5) * 0.5;
+        // --- ALGORITMO DE TRAZADO AVANZADO ---
+        const rType = rng(); // 0 a 1
+        let angleChange = 0;
+        let segmentLength = CONFIG.CHUNK_LENGTH;
+        let cpOffset = 50; // Control point offset (tensión de la curva)
+
+        // 60% RECTAS (o casi)
+        if (rType < 0.6) {
+            angleChange = (rng() - 0.5) * 0.1; // Desviación mínima
+        } 
+        // 20% CURVAS SUAVES
+        else if (rType < 0.8) {
+            angleChange = (rng() - 0.5) * 0.8; // +/- 0.4 rad (aprox 22 grados)
+        } 
+        // 20% CURVAS CERRADAS "ABIERTAS" (LARGAS)
+        else {
+            // Decidir dirección basada en RNG pero intentando evitar círculos (usando bias del estado)
+            let dir = rng() > 0.5 ? 1 : -1;
+            
+            // Si hemos girado mucho a la derecha (bias positivo), forzamos izquierda
+            if (state.worldGenState.curvatureBias > 2) dir = -1;
+            if (state.worldGenState.curvatureBias < -2) dir = 1;
+
+            // Giro fuerte: entre 60 y 110 grados (1.0 a 1.9 radianes)
+            const turnSharpness = 1.0 + rng() * 0.9; 
+            angleChange = dir * turnSharpness;
+
+            // Para que sea "abierta" (rápida), extendemos la longitud del segmento
+            // Así el giro es grande en ángulo total, pero suave en radio
+            segmentLength = CONFIG.CHUNK_LENGTH * 2.5; 
+            cpOffset = 180; // Puntos de control muy lejanos para curva amplia
+            
+            // Actualizar bias
+            state.worldGenState.curvatureBias += dir; 
+        }
+
+        // Decay del bias para que olvide giros antiguos
+        state.worldGenState.curvatureBias *= 0.8;
+
         const endAngle = startA + angleChange;
         const p0 = startP;
-        const endX = Math.cos(endAngle) * CONFIG.CHUNK_LENGTH + p0.x;
-        const endZ = Math.sin(endAngle) * CONFIG.CHUNK_LENGTH + p0.z;
         
+        // Calcular punto final basado en ángulo y longitud
+        const endX = Math.cos(endAngle) * segmentLength + p0.x;
+        const endZ = Math.sin(endAngle) * segmentLength + p0.z;
+        
+        // Altura del terreno en destino
         let tH = getTerrainHeight(endX, endZ);
+        // Suavizado de altura: Evitar montañas rusas imposibles
         let targetY = (tH < 1) ? Math.max(p0.y, 5) : tH + 3.0;
-        targetY = THREE.MathUtils.clamp(targetY, p0.y - 6.0, p0.y + 6.0);
+        // Limitar pendiente máxima relativa al chunk anterior
+        const maxSlope = segmentLength * 0.15; // 15% pendiente max
+        targetY = THREE.MathUtils.clamp(targetY, p0.y - maxSlope, p0.y + maxSlope);
 
         const p3 = new THREE.Vector3(endX, targetY, endZ);
-        const cp1 = new THREE.Vector3(Math.cos(startA)*50, 0, Math.sin(startA)*50).add(p0);
-        const cp2 = new THREE.Vector3(Math.cos(endAngle)*-50, 0, Math.sin(endAngle)*-50).add(p3);
+
+        // Puntos de control Bezier alineados con la tangente de entrada y salida
+        const cp1 = new THREE.Vector3(Math.cos(startA)*cpOffset, 0, Math.sin(startA)*cpOffset).add(p0);
+        const cp2 = new THREE.Vector3(Math.cos(endAngle)*-cpOffset, 0, Math.sin(endAngle)*-cpOffset).add(p3);
         
+        // Ajustar altura de puntos de control para suavizar rampa
+        cp1.y = p0.y; 
+        cp2.y = p3.y;
+
         this.curve = new THREE.CubicBezierCurve3(p0, cp1, cp2, p3);
         this.length = this.curve.getLength();
         this.endDist = globalDist + this.length;
-        this.endPoint = p3; this.endAngle = endAngle;
+        
+        // Guardar estado para el siguiente chunk
+        this.endPoint = p3;
+        this.endAngle = endAngle;
 
         this.buildGeometry();
         this.buildTerrain();
@@ -200,7 +253,8 @@ class Chunk {
     }
 
     buildGeometry() {
-        const div = 40; 
+        // Adaptar resolución según longitud del segmento
+        const div = Math.floor(this.length / 3); // 1 vértice cada 3 metros aprox
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
         
@@ -250,7 +304,10 @@ class Chunk {
     }
 
     buildTerrain() {
-        const div = 25; const w = 400; const divW = 10;
+        // Ancho del terreno duplicado (CONFIG.TERRAIN_WIDTH = 1000)
+        const div = Math.floor(this.length / 4); // Resolución adaptativa
+        const w = CONFIG.TERRAIN_WIDTH; 
+        const divW = 12; // Más detalle lateral
         const vs = [], cs = []; const col = new THREE.Color();
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
@@ -269,13 +326,14 @@ class Chunk {
         const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({vertexColors: true, flatShading: true}));
         m.receiveShadow = true; this.group.add(m);
         const mid = this.curve.getPointAt(0.5);
-        const wa = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), matWater);
+        const wa = new THREE.Mesh(new THREE.PlaneGeometry(w, this.length*1.2), matWater);
         wa.rotation.x = -Math.PI/2; wa.position.set(mid.x, -2, mid.z);
         this.group.add(wa);
     }
 
     buildProps() {
-        for(let i=0; i<=1; i+=0.15) {
+        // Distancia variable basada en longitud del chunk
+        for(let i=0; i<=1; i+= 5 / this.length) {
             const p = this.curve.getPointAt(i);
             const th = getTerrainHeight(p.x, p.z);
             if(p.y > th + 4) {
@@ -286,7 +344,9 @@ class Chunk {
                 this.group.add(pil);
             }
         }
-        for(let i=0; i<20; i++) {
+        // Árboles proporcionales a longitud
+        const treeCount = Math.floor(this.length / 5);
+        for(let i=0; i<treeCount; i++) {
             const t = rng(); const side = rng() > 0.5 ? 1 : -1; const dist = CONFIG.ROAD_WIDTH_HALF + 15 + rng() * 60;
             const p = this.curve.getPointAt(t); const tan = this.curve.getTangentAt(t);
             const bin = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
@@ -315,7 +375,7 @@ class Chunk {
                 cloud.add(m);
             }
             const p = this.curve.getPointAt(0.5);
-            cloud.position.set(p.x + (rng()-0.5)*400, 50 + rng()*40, p.z + (rng()-0.5)*400);
+            cloud.position.set(p.x + (rng()-0.5)*CONFIG.TERRAIN_WIDTH*0.8, 50 + rng()*40, p.z + (rng()-0.5)*CONFIG.TERRAIN_WIDTH*0.8);
             this.group.add(cloud);
             this.clouds.push(cloud);
         }
@@ -324,7 +384,8 @@ class Chunk {
     buildAtmosphere() {
         const pGeo = new THREE.BufferGeometry();
         const pPos = [];
-        for(let i=0; i<250; i++) {
+        const count = Math.floor(this.length * 2);
+        for(let i=0; i<count; i++) {
             const t = Math.random(); const p = this.curve.getPointAt(t);
             pPos.push(p.x + (Math.random()-0.5)*120, p.y + Math.random()*40, p.z + (Math.random()-0.5)*120);
         }
@@ -341,7 +402,10 @@ function spawnChunk() {
     const idx = chunks.length > 0 ? chunks[chunks.length-1].index + 1 : 0;
     const c = new Chunk(idx, state.worldGenState.point, state.worldGenState.angle, state.worldGenState.dist);
     chunks.push(c);
-    state.worldGenState.point = c.endPoint; state.worldGenState.angle = c.endAngle; state.worldGenState.dist += c.length;
+    // ACTUALIZAR ESTADO GLOBAL CON LOS DATOS CALCULADOS DENTRO DEL CHUNK
+    state.worldGenState.point = c.endPoint; 
+    state.worldGenState.angle = c.endAngle; 
+    state.worldGenState.dist += c.length;
 }
 
 function getTrackData(dist) {
@@ -523,8 +587,10 @@ function initThreeJS() {
         scene.add(mainCar);
         const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5); hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20); mainCar.add(hl); mainCar.add(hl.target);
 
-        chunks = []; state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
+        chunks = []; 
+        state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0, curvatureBias: 0 };
         for(let i=0; i<CONFIG.VISIBLE_CHUNKS; i++) spawnChunk();
+        
         const startData = getTrackData(0); if(startData) state.worldHeading = Math.atan2(startData.tan.x, startData.tan.z);
     } catch(e) {
         log("Init 3D Error: " + e.message, 'error');
@@ -694,7 +760,6 @@ joyZone.addEventListener('touchend', e => { e.preventDefault(); joyId = null; jo
 // ARROW BUTTONS LOGIC
 const btnLeft = document.getElementById('btn-left');
 const btnRight = document.getElementById('btn-right');
-// Si los botones existen en DOM (Modo PC)
 if(btnLeft && btnRight) {
     function handleArrow(dir, pressed) {
         if(pressed) state.input.steer = dir; // -1 (Right), 1 (Left) - Depende de inversión
