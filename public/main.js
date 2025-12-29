@@ -5,7 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // ==========================================
-// 0. DEBUG & LOGGING
+// 0. DEBUG & UTILIDADES
 // ==========================================
 const debugUI = document.getElementById('debug-console');
 function log(msg, type='info') {
@@ -24,7 +24,7 @@ window.onerror = function(msg, url, line) {
 };
 
 // ==========================================
-// 1. CONFIG & STATE
+// 1. CONFIG & ESTADO
 // ==========================================
 const CONFIG = {
     ROAD_WIDTH_HALF: 9.0,
@@ -48,20 +48,41 @@ const state = {
     lateralOffset: 0.0,
     trackDist: 0.0,
     input: { steer: 0, gas: false, brake: false },
-    // CONFIGURACIÓN POR DEFECTO ACTUALIZADA
     settings: {
         maxSpeed: 500, accel: 40, sens: 60, stiffness: 50, 
-        invertSteer: true,  // ACTIVADO
-        camDist: 18, fpv: false,
-        pcMode: false,      // Joystick por defecto
-        hideArrows: false
+        invertSteer: true, camDist: 18, fpv: false,
+        pcMode: false, hideArrows: false
     },
     seed: 1234,
     worldGenState: { point: new THREE.Vector3(0, 4, 0), angle: 0, dist: 0 }
 };
 
 // ==========================================
-// 2. RNG & NOISE
+// 2. VARIABLES GLOBALES MOTOR
+// ==========================================
+let scene, camera, renderer, composer;
+let chunks = []; 
+let smokeGroup, mainCar;
+let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
+const smokeParticles = [];
+
+// Materiales Globales
+const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
+const matRoad = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }); 
+const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
+const matLineY = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide, depthWrite: false });
+const matLineW = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthWrite: false });
+const matTailLight = new THREE.MeshBasicMaterial({ color: 0xff0000 }); 
+const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.4, metalness: 0.1, flatShading: true });
+const matPillar = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
+const matLeaves = new THREE.MeshStandardMaterial({color: 0x2e7d32});
+const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
+const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdddddd, emissiveIntensity: 0.2, flatShading: true });
+const matAtmosphere = new THREE.PointsMaterial({ size: 0.4, color: 0xffffff, transparent: true, opacity: 0.3 });
+
+
+// ==========================================
+// 3. RNG & NOISE & HELPERS (DEFINICIONES PREVIAS)
 // ==========================================
 const noisePerm = new Uint8Array(512); 
 const p = new Uint8Array(256);
@@ -81,11 +102,12 @@ function initNoise() {
     for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
     for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 }
+// Init fallback
 for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256);
 for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 
 function setSeed(s) { 
-    log(`Semilla establecida: ${s}`);
+    log(`Semilla: ${s}`);
     rng = mulberry32(s); 
     initNoise();
 }
@@ -96,221 +118,52 @@ const grad = (hash, x, y, z) => { const h = hash & 15; const u = h < 8 ? x : y, 
 const noise = (x, y) => { const X = Math.floor(x) & 255, Y = Math.floor(y) & 255; x -= Math.floor(x); y -= Math.floor(y); const u = fade(x), v = fade(y); const A = noisePerm[X] + Y, B = noisePerm[X + 1] + Y; return lerpFn(v, lerpFn(u, grad(noisePerm[A], x, y, 0), grad(noisePerm[B], x - 1, y, 0)), lerpFn(u, grad(noisePerm[A + 1], x, y - 1, 0), grad(noisePerm[B + 1], x - 1, y - 1, 0))); };
 function getTerrainHeight(x, z) { return noise(x*0.012, z*0.012)*30 + noise(x*0.04, z*0.04)*6; }
 
-// ==========================================
-// 3. UI & NETWORK
-// ==========================================
-let socket;
-const ui = {
-    login: document.getElementById('screen-login'),
-    lobby: document.getElementById('screen-lobby'),
-    loading: document.getElementById('loading'),
-    game: document.getElementById('game-ui'),
-    speed: document.getElementById('speed-display'),
-    fps: document.getElementById('fps'),
-    ping: document.getElementById('ping'),
-    menuBtn: document.getElementById('menu-btn'),
-    menuModal: document.getElementById('menu-modal'),
-    roomList: document.getElementById('room-list'),
-    brakeBtn: document.getElementById('brake-btn'),
-    leaderboard: document.getElementById('leaderboard'),
-    joystickZone: document.getElementById('joystick-zone'),
-    arrowControls: document.getElementById('arrow-controls'),
+// --- UTILS GEOMETRÍA ---
+function createGridGeometry(verts, colors, rows, cols) {
+    const g = new THREE.BufferGeometry(); const idx = [];
+    for(let i=0; i<rows; i++) for(let j=0; j<cols; j++) {
+        const a = i * (cols + 1) + j; const b = (i + 1) * (cols + 1) + j;
+        const c = (i + 1) * (cols + 1) + (j + 1); const d = i * (cols + 1) + (j + 1);
+        idx.push(a, b, d, b, c, d);
+    }
+    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    g.setIndex(idx); g.computeVertexNormals();
+    return g;
+}
+
+function createOutline(geo, scale) { const m = new THREE.Mesh(geo, matOutline); m.scale.multiplyScalar(scale); return m; }
+
+function createCar(colorStr) {
+    const car = new THREE.Group();
+    let col = 0xffffff;
+    try { col = new THREE.Color(colorStr); } catch(e) {}
     
-    // Config
-    optMaxSpeed: document.getElementById('opt-max-speed'), dispMaxSpeed: document.getElementById('disp-max-speed'),
-    optAccel: document.getElementById('opt-accel'), dispAccel: document.getElementById('disp-accel'),
-    optSens: document.getElementById('opt-sens'), dispSens: document.getElementById('disp-sens'),
-    optStiff: document.getElementById('opt-stiff'), dispStiff: document.getElementById('disp-stiff'),
-    optCamDist: document.getElementById('opt-cam-dist'), dispCamDist: document.getElementById('disp-cam-dist'),
-    hostControls: document.getElementById('host-controls'),
-    adminBadge: document.getElementById('admin-badge'),
+    const matBody = new THREE.MeshStandardMaterial({ color: col, roughness: 0.2, metalness: 0.6 });
+    const bGeo = new THREE.BoxGeometry(2.0, 0.7, 4.2);
+    const body = new THREE.Mesh(bGeo, matBody); body.position.y = 0.6; body.castShadow = true; car.add(body);
+    car.add(createOutline(bGeo, 1.03).translateY(0.6));
+    const cGeo = new THREE.BoxGeometry(1.6, 0.5, 2.0);
+    const cab = new THREE.Mesh(cGeo, new THREE.MeshStandardMaterial({color:0x111111})); cab.position.set(0, 1.2, -0.2); car.add(cab);
+    car.add(createOutline(cGeo, 1.03).translateY(1.2).translateZ(-0.2));
+    const sGeo = new THREE.BoxGeometry(2.2, 0.1, 0.6);
+    const sp = new THREE.Mesh(sGeo, new THREE.MeshStandardMaterial({color:0x111111})); sp.position.set(0, 1.3, -2.0); car.add(sp);
+    const wGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16).rotateZ(Math.PI/2);
+    const matW = new THREE.MeshStandardMaterial({color:0x222222});
+    [[1, 1.3], [-1, 1.3], [1, -1.3], [-1, -1.3]].forEach(p => {
+        const w = new THREE.Mesh(wGeo, matW); w.position.set(p[0], 0.4, p[1]); car.add(w);
+        car.add(createOutline(wGeo, 1.05).translateX(p[0]).translateY(0.4).translateZ(p[1]));
+    });
     
-    // Checks
-    chkDebug: document.getElementById('chk-debug'),
-    chkInvert: document.getElementById('chk-invert'),
-    chkShowBrake: document.getElementById('chk-show-brake'),
-    chkFPV: document.getElementById('chk-fpv'),
-    chkFps: document.getElementById('chk-fps'),
-    chkPing: document.getElementById('chk-ping'),
-    chkLb: document.getElementById('chk-lb'),
-    chkPcMode: document.getElementById('chk-pc-mode'),
-    chkHideArrows: document.getElementById('chk-hide-arrows')
-};
+    const tlGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
+    const tl1 = new THREE.Mesh(tlGeo, matTailLight); tl1.position.set(0.6, 0.7, -2.15); car.add(tl1);
+    const tl2 = new THREE.Mesh(tlGeo, matTailLight); tl2.position.set(-0.6, 0.7, -2.15); car.add(tl2);
+    const tlGlow = new THREE.PointLight(0xff0000, 2, 5); tlGlow.position.set(0, 0.7, -2.5); car.add(tlGlow);
 
-ui.menuBtn.onclick = () => ui.menuModal.style.display = (ui.menuModal.style.display==='flex'?'none':'flex');
-ui.chkDebug.onchange = (e) => debugUI.style.display = e.target.checked ? 'block' : 'none';
-
-const sendConfig = () => { if(state.isHost && socket) socket.emit('updateRoomConfig', { maxSpeed: parseInt(ui.optMaxSpeed.value), accel: parseInt(ui.optAccel.value) }); };
-ui.optMaxSpeed.oninput = (e) => { ui.dispMaxSpeed.innerText = e.target.value; sendConfig(); };
-ui.optAccel.oninput = (e) => { ui.dispAccel.innerText = e.target.value; sendConfig(); };
-
-ui.optSens.oninput = (e) => { state.settings.sens = parseInt(e.target.value); ui.dispSens.innerText = state.settings.sens + '%'; };
-ui.optStiff.oninput = (e) => { state.settings.stiffness = parseInt(e.target.value); ui.dispStiff.innerText = state.settings.stiffness + '%'; };
-ui.optCamDist.oninput = (e) => { state.settings.camDist = parseInt(e.target.value); ui.dispCamDist.innerText = state.settings.camDist; };
-
-ui.chkInvert.onchange = (e) => state.settings.invertSteer = e.target.checked;
-ui.chkShowBrake.onchange = (e) => ui.brakeBtn.style.display = e.target.checked ? 'flex' : 'none';
-ui.chkFPV.onchange = (e) => { state.settings.fpv = e.target.checked; updateCarVisibility(); };
-ui.chkFps.onchange = (e) => ui.fps.style.display = e.target.checked ? 'block' : 'none';
-ui.chkPing.onchange = (e) => ui.ping.style.display = e.target.checked ? 'block' : 'none';
-ui.chkLb.onchange = (e) => ui.leaderboard.style.display = e.target.checked ? 'flex' : 'none';
-
-// Lógica Modo PC/Flechas
-function updateControlMode() {
-    if(state.settings.pcMode) {
-        ui.joystickZone.style.display = 'none';
-        ui.arrowControls.style.display = state.settings.hideArrows ? 'none' : 'flex';
-    } else {
-        ui.joystickZone.style.display = 'block';
-        ui.arrowControls.style.display = 'none';
-    }
-}
-ui.chkPcMode.onchange = (e) => { state.settings.pcMode = e.target.checked; updateControlMode(); };
-ui.chkHideArrows.onchange = (e) => { state.settings.hideArrows = e.target.checked; updateControlMode(); };
-
-document.getElementById('btn-connect').onclick = () => {
-    log("Conectando...");
-    document.getElementById('status').innerText = "CONECTANDO...";
-    document.getElementById('status').style.color = "#0af";
-    socket = io(); setupSocket();
-};
-document.getElementById('btn-create').onclick = () => { log("Crear sala..."); socket.emit('createRoom'); };
-document.getElementById('btn-refresh').onclick = () => socket.emit('getRooms');
-document.getElementById('btn-join').onclick = () => { const c = document.getElementById('inp-code').value; if(c) socket.emit('joinRoom', c); };
-window.joinRoomId = (id) => { log(`Uniendo a ${id}...`); socket.emit('joinRoom', id); };
-
-function setupSocket() {
-    socket.on('connect', () => { 
-        log("Conectado. ID: " + socket.id);
-        state.myId = socket.id; ui.login.style.display = 'none'; ui.lobby.style.display = 'flex'; socket.emit('getRooms'); 
-    });
-    socket.on('disconnect', () => log("Desconectado.", 'error'));
-    socket.on('roomList', (list) => {
-        ui.roomList.innerHTML = '';
-        if(list.length===0) ui.roomList.innerHTML = '<div style="padding:10px;color:#666">NO HAY SALAS</div>';
-        list.forEach(r => { ui.roomList.innerHTML += `<div class="room-item"><span>${r.id} (${r.players}/8)</span><button class="main-btn secondary" onclick="window.joinRoomId('${r.id}')" style="width:auto;padding:5px;font-size:0.7rem;margin:0;">ENTRAR</button></div>`; });
-    });
-    socket.on('roomCreated', d => { log("Sala OK."); startGame(d); });
-    socket.on('roomJoined', d => { log("Unido OK."); startGame(d); });
-    socket.on('errorMsg', msg => log("Error: " + msg, 'error'));
-    socket.on('configUpdated', cfg => {
-        state.settings.maxSpeed = cfg.maxSpeed; state.settings.accel = cfg.accel;
-        if(!state.isHost) { ui.optMaxSpeed.value = cfg.maxSpeed; ui.dispMaxSpeed.innerText = cfg.maxSpeed; ui.optAccel.value = cfg.accel; ui.dispAccel.innerText = cfg.accel; }
-    });
-    socket.on('u', (data) => { if(state.inGame) updateRemotePlayers(data); });
-    socket.on('playerLeft', id => { 
-        if(state.players[id]) { scene.remove(state.players[id].mesh); delete state.players[id]; } 
-    });
-    setInterval(() => { const t = Date.now(); socket.emit('ping', () => { ui.ping.innerText = `PING: ${Date.now()-t}ms`; }); }, 2000);
+    return car;
 }
 
-function startGame(data) {
-    try {
-        state.seed = data.seed || 1234;
-        state.isHost = !!data.isHost;
-        state.myLabel = data.label || "PILOTO";
-        state.myColor = data.color || "#ffffff";
-        
-        const cfg = data.config || { maxSpeed: 500, accel: 40 };
-        state.settings.maxSpeed = cfg.maxSpeed;
-        state.settings.accel = cfg.accel;
-        ui.optMaxSpeed.value = state.settings.maxSpeed; ui.dispMaxSpeed.innerText = state.settings.maxSpeed;
-        ui.optAccel.value = state.settings.accel; ui.dispAccel.innerText = state.settings.accel;
-
-        if(state.isHost) { ui.hostControls.classList.remove('disabled-opt'); ui.adminBadge.style.display = 'inline-block'; } 
-        else { ui.hostControls.classList.add('disabled-opt'); ui.adminBadge.style.display = 'none'; }
-
-        setSeed(state.seed);
-        ui.lobby.style.display = 'none'; ui.loading.style.display = 'flex';
-        
-        log("Iniciando Motor...");
-        setTimeout(() => { 
-            initThreeJS(); 
-            ui.loading.style.display = 'none'; 
-            ui.game.style.display = 'block'; 
-            state.inGame = true; 
-            updateControlMode(); // Aplicar estado de controles
-            log("Juego Listo.");
-            animate(); 
-        }, 500);
-    } catch(e) {
-        log("Start Error: " + e.message, 'error');
-    }
-}
-
-// ==========================================
-// 4. MOTOR 3D
-// ==========================================
-let scene, camera, renderer, composer, chunks=[], smokeGroup, mainCar;
-let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
-const smokeParticles = [];
-const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
-
-const matRoad = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }); 
-const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
-const matLineY = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide, depthWrite: false });
-const matLineW = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthWrite: false });
-const matTailLight = new THREE.MeshBasicMaterial({ color: 0xff0000 }); 
-const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.4, metalness: 0.1, flatShading: true });
-const matPillar = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
-const matLeaves = new THREE.MeshStandardMaterial({color: 0x2e7d32});
-const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
-const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdddddd, emissiveIntensity: 0.2, flatShading: true });
-const matAtmosphere = new THREE.PointsMaterial({ size: 0.4, color: 0xffffff, transparent: true, opacity: 0.3 });
-
-function initThreeJS() {
-    try {
-        scene = new THREE.Scene(); scene.fog = new THREE.FogExp2(0x87CEEB, 0.002);
-        camera = new THREE.PerspectiveCamera(60, window.innerWidth/innerHeight, 0.1, 5000); camera.position.set(0,5,-10);
-        renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        const oldCanvas = document.querySelector('canvas'); if(oldCanvas) oldCanvas.remove();
-        document.body.appendChild(renderer.domElement);
-
-        const rp = new RenderPass(scene, camera);
-        const bp = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, innerHeight), 1.5, 0.4, 0.85);
-        bp.threshold=0.8; bp.strength=0.3; bp.radius=0.3;
-        composer = new EffectComposer(renderer); composer.addPass(rp); composer.addPass(bp);
-
-        setupEnvironment();
-        smokeGroup = new THREE.Group(); scene.add(smokeGroup);
-        
-        mainCar = createCar(state.myColor); 
-        scene.add(mainCar);
-        const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5); hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20); mainCar.add(hl); mainCar.add(hl.target);
-
-        chunks = []; state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
-        for(let i=0; i<CONFIG.VISIBLE_CHUNKS; i++) spawnChunk();
-        const startData = getTrackData(0); if(startData) state.worldHeading = Math.atan2(startData.tan.x, startData.tan.z);
-    } catch(e) {
-        log("Init 3D Error: " + e.message, 'error');
-        throw e;
-    }
-}
-
-function updateCarVisibility() {
-    if(!mainCar) return;
-    const visible = !state.settings.fpv;
-    mainCar.children.forEach(child => { if(child.isMesh) child.visible = visible; });
-}
-
-function setupEnvironment() {
-    ambientLight = new THREE.AmbientLight(0x404040, 1.5); scene.add(ambientLight);
-    sunLight = new THREE.DirectionalLight(0xffdf80, 2.5); sunLight.castShadow = true; 
-    sunLight.shadow.mapSize.set(2048, 2048); sunLight.shadow.camera.far = 1000;
-    sunLight.shadow.camera.left = -500; sunLight.shadow.camera.right = 500;
-    sunLight.shadow.camera.top = 500; sunLight.shadow.camera.bottom = -500;
-    scene.add(sunLight);
-    sunMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00, fog: false })); scene.add(sunMesh);
-    moonLight = new THREE.DirectionalLight(0x88ccff, 3.0); scene.add(moonLight);
-    moonMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false })); scene.add(moonMesh);
-    const sGeo = new THREE.BufferGeometry(); const sPos = []; for(let i=0; i<3000; i++) sPos.push((rng()-0.5)*2000, (rng()-0.5)*1000+500, (rng()-0.5)*2000);
-    sGeo.setAttribute('position', new THREE.Float32BufferAttribute(sPos, 3));
-    starField = new THREE.Points(sGeo, new THREE.PointsMaterial({color: 0xffffff, size: 1.5, transparent: true, opacity: 0})); scene.add(starField);
-}
-
+// --- CLASE CHUNK ---
 class Chunk {
     constructor(idx, startP, startA, globalDist) {
         this.index = idx;
@@ -443,7 +296,7 @@ class Chunk {
                 const gr = new THREE.Group();
                 const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 12, 5), matWood); tr.position.y = 6;
                 const lv = new THREE.Mesh(new THREE.ConeGeometry(3.5, 9, 5), matLeaves); lv.position.y = 11;
-                gr.add(tr, lv); gr.position.set(pos.x, y - 4.0, pos.z); // HUNDIR 4M
+                gr.add(tr, lv); gr.position.set(pos.x, y - 4.0, pos.z); 
                 gr.scale.setScalar(0.8 + rng() * 0.5); gr.castShadow = true;
                 this.group.add(gr);
             }
@@ -484,48 +337,220 @@ class Chunk {
     dispose() { scene.remove(this.group); this.group.traverse(o => { if(o.geometry) o.geometry.dispose(); }); }
 }
 
-function createGridGeometry(verts, colors, rows, cols) {
-    const g = new THREE.BufferGeometry(); const idx = [];
-    for(let i=0; i<rows; i++) for(let j=0; j<cols; j++) {
-        const a = i * (cols + 1) + j; const b = (i + 1) * (cols + 1) + j;
-        const c = (i + 1) * (cols + 1) + (j + 1); const d = i * (cols + 1) + (j + 1);
-        idx.push(a, b, d, b, c, d);
-    }
-    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    g.setIndex(idx); g.computeVertexNormals();
-    return g;
+function spawnChunk() {
+    const idx = chunks.length > 0 ? chunks[chunks.length-1].index + 1 : 0;
+    const c = new Chunk(idx, state.worldGenState.point, state.worldGenState.angle, state.worldGenState.dist);
+    chunks.push(c);
+    state.worldGenState.point = c.endPoint; state.worldGenState.angle = c.endAngle; state.worldGenState.dist += c.length;
 }
 
-function createOutline(geo, scale) { const m = new THREE.Mesh(geo, matOutline); m.scale.multiplyScalar(scale); return m; }
+function getTrackData(dist) {
+    for(let c of chunks) {
+        if(dist >= c.startDist && dist < c.endDist) {
+            const t = (dist - c.startDist) / c.length;
+            const pos = c.curve.getPointAt(t);
+            const tan = c.curve.getTangentAt(t).normalize();
+            const up = new THREE.Vector3(0,1,0);
+            const right = new THREE.Vector3().crossVectors(tan, up).normalize();
+            return { pos, tan, right };
+        }
+    }
+    return null;
+}
 
-function createCar(colorStr) {
-    const car = new THREE.Group();
-    let col = 0xffffff;
-    try { col = new THREE.Color(colorStr); } catch(e) {}
+// ==========================================
+// 5. UI & NETWORK
+// ==========================================
+let socket;
+const ui = {
+    login: document.getElementById('screen-login'),
+    lobby: document.getElementById('screen-lobby'),
+    loading: document.getElementById('loading'),
+    game: document.getElementById('game-ui'),
+    speed: document.getElementById('speed-display'),
+    fps: document.getElementById('fps'),
+    ping: document.getElementById('ping'),
+    menuBtn: document.getElementById('menu-btn'),
+    menuModal: document.getElementById('menu-modal'),
+    roomList: document.getElementById('room-list'),
+    brakeBtn: document.getElementById('brake-btn'),
+    leaderboard: document.getElementById('leaderboard'),
+    joystickZone: document.getElementById('joystick-zone'),
+    arrowControls: document.getElementById('arrow-controls'),
     
-    const matBody = new THREE.MeshStandardMaterial({ color: col, roughness: 0.2, metalness: 0.6 });
-    const bGeo = new THREE.BoxGeometry(2.0, 0.7, 4.2);
-    const body = new THREE.Mesh(bGeo, matBody); body.position.y = 0.6; body.castShadow = true; car.add(body);
-    car.add(createOutline(bGeo, 1.03).translateY(0.6));
-    const cGeo = new THREE.BoxGeometry(1.6, 0.5, 2.0);
-    const cab = new THREE.Mesh(cGeo, new THREE.MeshStandardMaterial({color:0x111111})); cab.position.set(0, 1.2, -0.2); car.add(cab);
-    car.add(createOutline(cGeo, 1.03).translateY(1.2).translateZ(-0.2));
-    const sGeo = new THREE.BoxGeometry(2.2, 0.1, 0.6);
-    const sp = new THREE.Mesh(sGeo, new THREE.MeshStandardMaterial({color:0x111111})); sp.position.set(0, 1.3, -2.0); car.add(sp);
-    const wGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.4, 16).rotateZ(Math.PI/2);
-    const matW = new THREE.MeshStandardMaterial({color:0x222222});
-    [[1, 1.3], [-1, 1.3], [1, -1.3], [-1, -1.3]].forEach(p => {
-        const w = new THREE.Mesh(wGeo, matW); w.position.set(p[0], 0.4, p[1]); car.add(w);
-        car.add(createOutline(wGeo, 1.05).translateX(p[0]).translateY(0.4).translateZ(p[1]));
+    optMaxSpeed: document.getElementById('opt-max-speed'), dispMaxSpeed: document.getElementById('disp-max-speed'),
+    optAccel: document.getElementById('opt-accel'), dispAccel: document.getElementById('disp-accel'),
+    optSens: document.getElementById('opt-sens'), dispSens: document.getElementById('disp-sens'),
+    optStiff: document.getElementById('opt-stiff'), dispStiff: document.getElementById('disp-stiff'),
+    optCamDist: document.getElementById('opt-cam-dist'), dispCamDist: document.getElementById('disp-cam-dist'),
+    hostControls: document.getElementById('host-controls'),
+    adminBadge: document.getElementById('admin-badge'),
+    
+    chkDebug: document.getElementById('chk-debug'),
+    chkInvert: document.getElementById('chk-invert'),
+    chkShowBrake: document.getElementById('chk-show-brake'),
+    chkFPV: document.getElementById('chk-fpv'),
+    chkFps: document.getElementById('chk-fps'),
+    chkPing: document.getElementById('chk-ping'),
+    chkLb: document.getElementById('chk-lb'),
+    chkPcMode: document.getElementById('chk-pc-mode'),
+    chkHideArrows: document.getElementById('chk-hide-arrows')
+};
+
+ui.menuBtn.onclick = () => ui.menuModal.style.display = (ui.menuModal.style.display==='flex'?'none':'flex');
+ui.chkDebug.onchange = (e) => debugUI.style.display = e.target.checked ? 'block' : 'none';
+
+const sendConfig = () => { if(state.isHost && socket) socket.emit('updateRoomConfig', { maxSpeed: parseInt(ui.optMaxSpeed.value), accel: parseInt(ui.optAccel.value) }); };
+ui.optMaxSpeed.oninput = (e) => { ui.dispMaxSpeed.innerText = e.target.value; sendConfig(); };
+ui.optAccel.oninput = (e) => { ui.dispAccel.innerText = e.target.value; sendConfig(); };
+
+ui.optSens.oninput = (e) => { state.settings.sens = parseInt(e.target.value); ui.dispSens.innerText = state.settings.sens + '%'; };
+ui.optStiff.oninput = (e) => { state.settings.stiffness = parseInt(e.target.value); ui.dispStiff.innerText = state.settings.stiffness + '%'; };
+ui.optCamDist.oninput = (e) => { state.settings.camDist = parseInt(e.target.value); ui.dispCamDist.innerText = state.settings.camDist; };
+
+ui.chkInvert.onchange = (e) => state.settings.invertSteer = e.target.checked;
+ui.chkShowBrake.onchange = (e) => ui.brakeBtn.style.display = e.target.checked ? 'flex' : 'none';
+ui.chkFPV.onchange = (e) => { state.settings.fpv = e.target.checked; updateCarVisibility(); };
+ui.chkFps.onchange = (e) => ui.fps.style.display = e.target.checked ? 'block' : 'none';
+ui.chkPing.onchange = (e) => ui.ping.style.display = e.target.checked ? 'block' : 'none';
+ui.chkLb.onchange = (e) => ui.leaderboard.style.display = e.target.checked ? 'flex' : 'none';
+
+function updateControlMode() {
+    if(state.settings.pcMode) {
+        ui.joystickZone.style.display = 'none';
+        ui.arrowControls.style.display = state.settings.hideArrows ? 'none' : 'flex';
+    } else {
+        ui.joystickZone.style.display = 'block';
+        ui.arrowControls.style.display = 'none';
+    }
+}
+ui.chkPcMode.onchange = (e) => { state.settings.pcMode = e.target.checked; updateControlMode(); };
+ui.chkHideArrows.onchange = (e) => { state.settings.hideArrows = e.target.checked; updateControlMode(); };
+
+document.getElementById('btn-connect').onclick = () => {
+    log("Conectando...");
+    document.getElementById('status').innerText = "CONECTANDO...";
+    document.getElementById('status').style.color = "#0af";
+    socket = io(); setupSocket();
+};
+document.getElementById('btn-create').onclick = () => { log("Crear sala..."); socket.emit('createRoom'); };
+document.getElementById('btn-refresh').onclick = () => socket.emit('getRooms');
+document.getElementById('btn-join').onclick = () => { const c = document.getElementById('inp-code').value; if(c) socket.emit('joinRoom', c); };
+window.joinRoomId = (id) => { log(`Uniendo a ${id}...`); socket.emit('joinRoom', id); };
+
+function setupSocket() {
+    socket.on('connect', () => { 
+        log("Conectado. ID: " + socket.id);
+        state.myId = socket.id; ui.login.style.display = 'none'; ui.lobby.style.display = 'flex'; socket.emit('getRooms'); 
     });
-    
-    const tlGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
-    const tl1 = new THREE.Mesh(tlGeo, matTailLight); tl1.position.set(0.6, 0.7, -2.15); car.add(tl1);
-    const tl2 = new THREE.Mesh(tlGeo, matTailLight); tl2.position.set(-0.6, 0.7, -2.15); car.add(tl2);
-    const tlGlow = new THREE.PointLight(0xff0000, 2, 5); tlGlow.position.set(0, 0.7, -2.5); car.add(tlGlow);
+    socket.on('disconnect', () => log("Desconectado.", 'error'));
+    socket.on('roomList', (list) => {
+        ui.roomList.innerHTML = '';
+        if(list.length===0) ui.roomList.innerHTML = '<div style="padding:10px;color:#666">NO HAY SALAS</div>';
+        list.forEach(r => { ui.roomList.innerHTML += `<div class="room-item"><span>${r.id} (${r.players}/8)</span><button class="main-btn secondary" onclick="window.joinRoomId('${r.id}')" style="width:auto;padding:5px;font-size:0.7rem;margin:0;">ENTRAR</button></div>`; });
+    });
+    socket.on('roomCreated', d => { log("Sala OK."); startGame(d); });
+    socket.on('roomJoined', d => { log("Unido OK."); startGame(d); });
+    socket.on('errorMsg', msg => log("Error: " + msg, 'error'));
+    socket.on('configUpdated', cfg => {
+        state.settings.maxSpeed = cfg.maxSpeed; state.settings.accel = cfg.accel;
+        if(!state.isHost) { ui.optMaxSpeed.value = cfg.maxSpeed; ui.dispMaxSpeed.innerText = cfg.maxSpeed; ui.optAccel.value = cfg.accel; ui.dispAccel.innerText = cfg.accel; }
+    });
+    socket.on('u', (data) => { if(state.inGame) updateRemotePlayers(data); });
+    socket.on('playerLeft', id => { 
+        if(state.players[id]) { scene.remove(state.players[id].mesh); delete state.players[id]; } 
+    });
+    setInterval(() => { const t = Date.now(); socket.emit('ping', () => { ui.ping.innerText = `PING: ${Date.now()-t}ms`; }); }, 2000);
+}
 
-    return car;
+function startGame(data) {
+    try {
+        state.seed = data.seed || 1234;
+        state.isHost = !!data.isHost;
+        state.myLabel = data.label || "PILOTO";
+        state.myColor = data.color || "#ffffff";
+        
+        const cfg = data.config || { maxSpeed: 500, accel: 40 };
+        state.settings.maxSpeed = cfg.maxSpeed;
+        state.settings.accel = cfg.accel;
+        ui.optMaxSpeed.value = state.settings.maxSpeed; ui.dispMaxSpeed.innerText = state.settings.maxSpeed;
+        ui.optAccel.value = state.settings.accel; ui.dispAccel.innerText = state.settings.accel;
+
+        if(state.isHost) { ui.hostControls.classList.remove('disabled-opt'); ui.adminBadge.style.display = 'inline-block'; } 
+        else { ui.hostControls.classList.add('disabled-opt'); ui.adminBadge.style.display = 'none'; }
+
+        setSeed(state.seed);
+        ui.lobby.style.display = 'none'; ui.loading.style.display = 'flex';
+        
+        log("Iniciando Motor...");
+        setTimeout(() => { 
+            initThreeJS(); 
+            ui.loading.style.display = 'none'; 
+            ui.game.style.display = 'block'; 
+            state.inGame = true; 
+            updateControlMode();
+            log("Juego Listo.");
+            animate(); 
+        }, 500);
+    } catch(e) {
+        log("Start Error: " + e.message, 'error');
+    }
+}
+
+// ==========================================
+// 6. INICIALIZACIÓN 3D
+// ==========================================
+function initThreeJS() {
+    try {
+        scene = new THREE.Scene(); scene.fog = new THREE.FogExp2(0x87CEEB, 0.002);
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth/innerHeight, 0.1, 5000); camera.position.set(0,5,-10);
+        renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        const oldCanvas = document.querySelector('canvas'); if(oldCanvas) oldCanvas.remove();
+        document.body.appendChild(renderer.domElement);
+
+        const rp = new RenderPass(scene, camera);
+        const bp = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, innerHeight), 1.5, 0.4, 0.85);
+        bp.threshold=0.8; bp.strength=0.3; bp.radius=0.3;
+        composer = new EffectComposer(renderer); composer.addPass(rp); composer.addPass(bp);
+
+        setupEnvironment();
+        smokeGroup = new THREE.Group(); scene.add(smokeGroup);
+        
+        mainCar = createCar(state.myColor); 
+        scene.add(mainCar);
+        const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5); hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20); mainCar.add(hl); mainCar.add(hl.target);
+
+        chunks = []; state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
+        for(let i=0; i<CONFIG.VISIBLE_CHUNKS; i++) spawnChunk();
+        const startData = getTrackData(0); if(startData) state.worldHeading = Math.atan2(startData.tan.x, startData.tan.z);
+    } catch(e) {
+        log("Init 3D Error: " + e.message, 'error');
+        throw e;
+    }
+}
+
+function updateCarVisibility() {
+    if(!mainCar) return;
+    const visible = !state.settings.fpv;
+    mainCar.children.forEach(child => { if(child.isMesh) child.visible = visible; });
+}
+
+function setupEnvironment() {
+    ambientLight = new THREE.AmbientLight(0x404040, 1.5); scene.add(ambientLight);
+    sunLight = new THREE.DirectionalLight(0xffdf80, 2.5); sunLight.castShadow = true; 
+    sunLight.shadow.mapSize.set(2048, 2048); sunLight.shadow.camera.far = 1000;
+    sunLight.shadow.camera.left = -500; sunLight.shadow.camera.right = 500;
+    sunLight.shadow.camera.top = 500; sunLight.shadow.camera.bottom = -500;
+    scene.add(sunLight);
+    sunMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00, fog: false })); scene.add(sunMesh);
+    moonLight = new THREE.DirectionalLight(0x88ccff, 3.0); scene.add(moonLight);
+    moonMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false })); scene.add(moonMesh);
+    const sGeo = new THREE.BufferGeometry(); const sPos = []; for(let i=0; i<3000; i++) sPos.push((rng()-0.5)*2000, (rng()-0.5)*1000+500, (rng()-0.5)*2000);
+    sGeo.setAttribute('position', new THREE.Float32BufferAttribute(sPos, 3));
+    starField = new THREE.Points(sGeo, new THREE.PointsMaterial({color: 0xffffff, size: 1.5, transparent: true, opacity: 0})); scene.add(starField);
 }
 
 // ==========================================
@@ -669,23 +694,35 @@ joyZone.addEventListener('touchend', e => { e.preventDefault(); joyId = null; jo
 // ARROW BUTTONS LOGIC
 const btnLeft = document.getElementById('btn-left');
 const btnRight = document.getElementById('btn-right');
-function handleArrow(dir, pressed) {
-    if(pressed) state.input.steer = dir;
-    else if(state.input.steer === dir) state.input.steer = 0;
+// Si los botones existen en DOM (Modo PC)
+if(btnLeft && btnRight) {
+    function handleArrow(dir, pressed) {
+        if(pressed) state.input.steer = dir; // -1 (Right), 1 (Left) - Depende de inversión
+        else if(state.input.steer === dir) state.input.steer = 0;
+    }
+    btnLeft.addEventListener('touchstart', (e)=>{ e.preventDefault(); handleArrow(1, true); });
+    btnLeft.addEventListener('touchend', (e)=>{ e.preventDefault(); handleArrow(1, false); });
+    btnLeft.addEventListener('mousedown', (e)=>{ e.preventDefault(); handleArrow(1, true); });
+    btnLeft.addEventListener('mouseup', (e)=>{ e.preventDefault(); handleArrow(1, false); });
+    btnRight.addEventListener('touchstart', (e)=>{ e.preventDefault(); handleArrow(-1, true); });
+    btnRight.addEventListener('touchend', (e)=>{ e.preventDefault(); handleArrow(-1, false); });
+    btnRight.addEventListener('mousedown', (e)=>{ e.preventDefault(); handleArrow(-1, true); });
+    btnRight.addEventListener('mouseup', (e)=>{ e.preventDefault(); handleArrow(-1, false); });
 }
-// Events for arrows
-btnLeft.addEventListener('touchstart', (e)=>{ e.preventDefault(); handleArrow(1, true); });
-btnLeft.addEventListener('touchend', (e)=>{ e.preventDefault(); handleArrow(1, false); });
-btnLeft.addEventListener('mousedown', (e)=>{ e.preventDefault(); handleArrow(1, true); });
-btnLeft.addEventListener('mouseup', (e)=>{ e.preventDefault(); handleArrow(1, false); });
-
-btnRight.addEventListener('touchstart', (e)=>{ e.preventDefault(); handleArrow(-1, true); });
-btnRight.addEventListener('touchend', (e)=>{ e.preventDefault(); handleArrow(-1, false); });
-btnRight.addEventListener('mousedown', (e)=>{ e.preventDefault(); handleArrow(-1, true); });
-btnRight.addEventListener('mouseup', (e)=>{ e.preventDefault(); handleArrow(-1, false); });
 
 const bindBtn = (id, key) => { const el = document.getElementById(id); const set = (v) => { state.input[key] = v; el.style.transform = v?'scale(0.9)':'scale(1)'; el.style.opacity = v?'1':'0.8'; }; el.addEventListener('touchstart', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('touchend', (e)=>{ e.preventDefault(); set(false); }); el.addEventListener('mousedown', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('mouseup', (e)=>{ e.preventDefault(); set(false); }); };
 bindBtn('gas-btn', 'gas'); bindBtn('brake-btn', 'brake');
-window.addEventListener('keydown', e => { if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = true; if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = true; if(e.key === 'ArrowLeft' || e.key === 'a') state.input.steer = 1; if(e.key === 'ArrowRight' || e.key === 'd') state.input.steer = -1; });
-window.addEventListener('keyup', e => { if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = false; if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = false; if(['ArrowLeft','ArrowRight','a','d'].includes(e.key)) state.input.steer = 0; });
+
+window.addEventListener('keydown', e => { 
+    if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = true; 
+    if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = true; 
+    if(e.key === 'ArrowLeft' || e.key === 'a') state.input.steer = 1; 
+    if(e.key === 'ArrowRight' || e.key === 'd') state.input.steer = -1; 
+});
+window.addEventListener('keyup', e => { 
+    if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = false; 
+    if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = false; 
+    if(['ArrowLeft','ArrowRight','a','d'].includes(e.key)) state.input.steer = 0; 
+});
+
 window.addEventListener('resize', () => { if(camera && renderer) { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight); } });
