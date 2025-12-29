@@ -5,33 +5,50 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // ==========================================
-// CONFIGURACIÓN VISUAL
+// 1. CONFIGURACIÓN Y ESTADO GLOBAL
 // ==========================================
 const CONFIG = {
     ROAD_WIDTH_HALF: 9.0,
     WALL_WIDTH: 1.2,
     WALL_HEIGHT: 1.5,
-    ROAD_Y_OFFSET: 0.2,
+    ROAD_Y_OFFSET: 0.2, // Altura base de la carretera sobre el terreno
     CHUNK_LENGTH: 100,
-    VISIBLE_CHUNKS: 16
+    VISIBLE_CHUNKS: 16,
+    WALL_LIMIT: 7.8 // Límite colisión lateral
 };
 
 const state = {
     inGame: false,
     myId: null,
-    players: {},    
+    isHost: false,
+    players: {}, // { id: { mesh: Object3D, ... } }
+    
+    // FÍSICAS (Cliente Autoridad)
+    manualSpeed: 0.0,
+    worldHeading: 0.0,
+    lateralOffset: 0.0,
+    trackDist: 0.0,
+    
+    // INPUTS
     input: { steer: 0, gas: false, brake: false },
-    seed: 1234,     
-    worldGenState: { 
-        point: new THREE.Vector3(0, 4, 0),
-        angle: 0,
-        dist: 0
-    }
+    
+    // AJUSTES (Settings)
+    settings: {
+        maxSpeed: 500,      // Controlado por Host
+        accel: 40,          // Controlado por Host
+        sens: 60,           // Local
+        stiffness: 50       // Local
+    },
+    
+    // GENERACIÓN
+    seed: 1234,
+    worldGenState: { point: new THREE.Vector3(0, 4, 0), angle: 0, dist: 0 }
 };
 
 // ==========================================
-// SISTEMA RNG
+// 2. SISTEMA RNG DETERMINISTA
 // ==========================================
+// Necesario para que todos los jugadores generen la misma carretera
 function mulberry32(a) {
     return function() {
       var t = a += 0x6D2B79F5;
@@ -44,7 +61,7 @@ let rng = mulberry32(1);
 function setSeed(s) { rng = mulberry32(s); }
 
 // ==========================================
-// RED Y UI
+// 3. UI & NETWORK SETUP
 // ==========================================
 let socket;
 const ui = {
@@ -52,70 +69,131 @@ const ui = {
     lobby: document.getElementById('screen-lobby'),
     loading: document.getElementById('loading'),
     game: document.getElementById('game-ui'),
-    roomList: document.getElementById('room-list'),
     speed: document.getElementById('speed-display'),
+    fps: document.getElementById('fps'),
     ping: document.getElementById('ping'),
     menuBtn: document.getElementById('menu-btn'),
-    menuModal: document.getElementById('menu-modal')
+    menuModal: document.getElementById('menu-modal'),
+    roomList: document.getElementById('room-list'),
+    
+    // Opciones Menú
+    optMaxSpeed: document.getElementById('opt-max-speed'),
+    dispMaxSpeed: document.getElementById('disp-max-speed'),
+    optAccel: document.getElementById('opt-accel'),
+    dispAccel: document.getElementById('disp-accel'),
+    optSens: document.getElementById('opt-sens'),
+    dispSens: document.getElementById('disp-sens'),
+    optStiff: document.getElementById('opt-stiff'),
+    dispStiff: document.getElementById('disp-stiff'),
+    hostControls: document.getElementById('host-controls'),
+    adminBadge: document.getElementById('admin-badge'),
+    chkFps: document.getElementById('chk-fps'),
+    chkPing: document.getElementById('chk-ping')
 };
 
-// MENÚ TOGGLE
+// Toggle Menú
 ui.menuBtn.onclick = () => {
     const isFlex = ui.menuModal.style.display === 'flex';
     ui.menuModal.style.display = isFlex ? 'none' : 'flex';
 };
 
-document.getElementById('btn-connect').onclick = initNetwork;
+// Configuración Host (Sincronizada)
+const sendConfig = () => {
+    if(state.isHost && socket) {
+        socket.emit('updateRoomConfig', {
+            maxSpeed: parseInt(ui.optMaxSpeed.value),
+            accel: parseInt(ui.optAccel.value)
+        });
+    }
+};
+ui.optMaxSpeed.oninput = (e) => { ui.dispMaxSpeed.innerText = e.target.value; sendConfig(); };
+ui.optAccel.oninput = (e) => { ui.dispAccel.innerText = e.target.value; sendConfig(); };
+
+// Configuración Local
+ui.optSens.oninput = (e) => { state.settings.sens = parseInt(e.target.value); ui.dispSens.innerText = state.settings.sens + '%'; };
+ui.optStiff.oninput = (e) => { state.settings.stiffness = parseInt(e.target.value); ui.dispStiff.innerText = state.settings.stiffness + '%'; };
+ui.chkFps.onchange = (e) => { ui.fps.style.display = e.target.checked ? 'block' : 'none'; };
+ui.chkPing.onchange = (e) => { ui.ping.style.display = e.target.checked ? 'block' : 'none'; };
+
+// Botones Conexión
+document.getElementById('btn-connect').onclick = () => {
+    document.getElementById('status').innerText = "ESTABLECIENDO ENLACE...";
+    document.getElementById('status').style.color = "#0af";
+    socket = io();
+    setupSocket();
+};
 document.getElementById('btn-create').onclick = () => socket.emit('createRoom');
 document.getElementById('btn-refresh').onclick = () => socket.emit('getRooms');
 document.getElementById('btn-join').onclick = () => {
-    const code = document.getElementById('inp-code').value;
-    if(code) socket.emit('joinRoom', code);
+    const c = document.getElementById('inp-code').value;
+    if(c) socket.emit('joinRoom', c);
 };
 window.joinRoomId = (id) => socket.emit('joinRoom', id);
 
-function initNetwork() {
-    document.getElementById('status').innerText = "ESTABLECIENDO ENLACE NEURONAL...";
-    document.getElementById('status').style.color = "#0af";
-    socket = io();
-
+function setupSocket() {
     socket.on('connect', () => {
         state.myId = socket.id;
         ui.login.style.display = 'none';
-        ui.lobby.style.display = 'flex'; // Usamos flex para centrar
+        ui.lobby.style.display = 'flex';
         socket.emit('getRooms');
     });
 
     socket.on('roomList', (list) => {
         ui.roomList.innerHTML = '';
-        if(list.length === 0) ui.roomList.innerHTML = '<div style="padding:10px; font-style:italic; color:#666;">NO SE DETECTAN SEÑALES DE CARRERA.</div>';
+        if(list.length===0) ui.roomList.innerHTML = '<div style="padding:10px;color:#666;font-style:italic">NO HAY SALAS ACTIVAS</div>';
         list.forEach(r => {
-            ui.roomList.innerHTML += `<div class="room-item">
-                <span>SALA <b>${r.id}</b> <small>(${r.players}/8)</small></span>
-                <button class="main-btn secondary" onclick="window.joinRoomId('${r.id}')" style="width:80px; padding:8px; font-size:0.7rem;">ENTRAR</button>
-            </div>`;
+            ui.roomList.innerHTML += `<div class="room-item"><span>${r.id} (${r.players}/8)</span><button class="main-btn secondary" onclick="window.joinRoomId('${r.id}')" style="width:auto;padding:5px 10px;font-size:0.7rem;margin:0;">ENTRAR</button></div>`;
         });
     });
 
-    socket.on('roomCreated', (data) => startGame(data));
-    socket.on('roomJoined', (data) => startGame(data));
-    socket.on('errorMsg', (msg) => alert(msg));
-    socket.on('u', (data) => { if(state.inGame) updateWorldState(data); });
-    socket.on('playerLeft', (id) => {
-        if(state.players[id]) { scene.remove(state.players[id].mesh); delete state.players[id]; }
+    socket.on('roomCreated', d => startGame(d));
+    socket.on('roomJoined', d => startGame(d));
+    
+    // Sync Configuración
+    socket.on('configUpdated', cfg => {
+        state.settings.maxSpeed = cfg.maxSpeed;
+        state.settings.accel = cfg.accel;
+        if(!state.isHost) {
+            ui.optMaxSpeed.value = cfg.maxSpeed; ui.dispMaxSpeed.innerText = cfg.maxSpeed;
+            ui.optAccel.value = cfg.accel; ui.dispAccel.innerText = cfg.accel;
+        }
     });
 
+    // Actualización Físicas Remotas
+    socket.on('u', (data) => { if(state.inGame) updateRemotePlayers(data); });
+    socket.on('playerLeft', id => { 
+        if(state.players[id]) { scene.remove(state.players[id].mesh); delete state.players[id]; } 
+    });
+
+    // Ping
     setInterval(() => {
-        const start = Date.now();
-        socket.emit('ping', () => { ui.ping.innerText = `PING: ${Date.now() - start}ms`; });
+        const t = Date.now();
+        socket.emit('ping', () => { ui.ping.innerText = `PING: ${Date.now()-t}ms`; });
     }, 2000);
 }
 
 function startGame(data) {
     state.seed = data.seed;
-    setSeed(state.seed); 
+    state.isHost = data.isHost;
+    
+    state.settings.maxSpeed = data.config.maxSpeed;
+    state.settings.accel = data.config.accel;
+    
+    ui.optMaxSpeed.value = data.config.maxSpeed; ui.dispMaxSpeed.innerText = data.config.maxSpeed;
+    ui.optAccel.value = data.config.accel; ui.dispAccel.innerText = data.config.accel;
+
+    if(state.isHost) {
+        ui.hostControls.classList.remove('disabled-opt');
+        ui.adminBadge.style.display = 'inline-block';
+    } else {
+        ui.hostControls.classList.add('disabled-opt');
+        ui.adminBadge.style.display = 'none';
+    }
+
+    setSeed(state.seed);
     ui.lobby.style.display = 'none';
     ui.loading.style.display = 'flex';
+    
     setTimeout(() => {
         initThreeJS();
         ui.loading.style.display = 'none';
@@ -126,26 +204,24 @@ function startGame(data) {
 }
 
 // ==========================================
-// MOTOR GRÁFICO
+// 4. MOTOR 3D (THREE.JS)
 // ==========================================
-let scene, camera, renderer, composer;
-let chunks = [];
+let scene, camera, renderer, composer, chunks=[], smokeGroup, mainCar;
 let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
-const smokeParticles = []; const smokeGroup = new THREE.Group();
+const smokeParticles = [];
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
 // MATERIALES
 const matRoad = new THREE.MeshStandardMaterial({ 
-    color: 0x111111, 
-    roughness: 0.6, 
-    metalness: 0.1, 
-    side: THREE.DoubleSide
+    color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide 
 }); 
-const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
-
-// LÍNEAS: Usamos depthWrite:false para forzar que se pinten sobre el asfalto sin z-fighting
-const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide }); 
-const matLineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+const matWall = new THREE.MeshStandardMaterial({ 
+    color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide 
+});
+// Líneas con depthWrite:false para evitar z-fighting
+const matLineY = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide, depthWrite: false });
+const matLineW = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthWrite: false });
+const matTailLight = new THREE.MeshBasicMaterial({ color: 0xff0000 }); 
 
 const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.4, metalness: 0.1, flatShading: true });
 const matPillar = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
@@ -154,17 +230,14 @@ const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
 const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdddddd, emissiveIntensity: 0.2, flatShading: true });
 const matAtmosphere = new THREE.PointsMaterial({ size: 0.4, color: 0xffffff, transparent: true, opacity: 0.3 });
 
-// MATERIALES COCHE
-const matTailLight = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Luz roja pura
-
 function initThreeJS() {
     scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x87CEEB, 0.002);
+    
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 5000);
+    camera.position.set(0,5,-10);
 
-    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 5000);
-    camera.position.set(0, 5, -10);
-
-    renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true }); 
+    renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -174,24 +247,38 @@ function initThreeJS() {
     if(oldCanvas) oldCanvas.remove();
     document.body.appendChild(renderer.domElement);
 
-    const renderPass = new RenderPass(scene, camera);
-    const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-    bloomPass.threshold = 0.8; bloomPass.strength = 0.25; bloomPass.radius = 0.3;
-    
+    const rp = new RenderPass(scene, camera);
+    const bp = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, innerHeight), 1.5, 0.4, 0.85);
+    bp.threshold=0.8; bp.strength=0.3; bp.radius=0.3;
     composer = new EffectComposer(renderer);
-    composer.addPass(renderPass);
-    composer.addPass(bloomPass);
+    composer.addPass(rp); composer.addPass(bp);
 
     setupEnvironment();
-    scene.add(smokeGroup);
+    
+    smokeGroup = new THREE.Group(); scene.add(smokeGroup);
+    
+    // Crear Coche Propio
+    const hue = Math.floor(Math.random()*360);
+    mainCar = createCar(`hsl(${hue}, 100%, 50%)`);
+    scene.add(mainCar);
+    
+    // Faros delanteros
+    const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5);
+    hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20);
+    mainCar.add(hl); mainCar.add(hl.target);
 
+    // Inicializar Mundo Procedural
     chunks = [];
-    state.worldGenState = { point: new THREE.Vector3(0, 4, 0), angle: 0, dist: 0 };
+    state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
     for(let i=0; i<CONFIG.VISIBLE_CHUNKS; i++) spawnChunk();
+
+    // Orientación inicial correcta
+    const startData = getTrackData(0);
+    if(startData) state.worldHeading = Math.atan2(startData.tan.x, startData.tan.z);
 }
 
 function setupEnvironment() {
-    ambientLight = new THREE.AmbientLight(0x404040, 1.8); scene.add(ambientLight);
+    ambientLight = new THREE.AmbientLight(0x404040, 1.5); scene.add(ambientLight);
     sunLight = new THREE.DirectionalLight(0xffdf80, 2.5);
     sunLight.castShadow = true; 
     sunLight.shadow.mapSize.set(2048, 2048);
@@ -199,8 +286,10 @@ function setupEnvironment() {
     sunLight.shadow.camera.left = -500; sunLight.shadow.camera.right = 500;
     sunLight.shadow.camera.top = 500; sunLight.shadow.camera.bottom = -500;
     scene.add(sunLight);
+    
     sunMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00, fog: false }));
     scene.add(sunMesh);
+    
     moonLight = new THREE.DirectionalLight(0x88ccff, 3.0); scene.add(moonLight);
     moonMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false }));
     scene.add(moonMesh);
@@ -213,15 +302,15 @@ function setupEnvironment() {
 }
 
 // ==========================================
-// GENERACIÓN PROCEDURAL
+// 5. GENERACIÓN PROCEDURAL (CHUNKS)
 // ==========================================
 const noisePerm = new Uint8Array(512); const p = new Uint8Array(256);
 for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
 for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
-const lerp = (t, a, b) => a + t * (b - a);
+const lerpFn = (t, a, b) => a + t * (b - a);
 const grad = (hash, x, y, z) => { const h = hash & 15; const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z; return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v); };
-const noise = (x, y) => { const X = Math.floor(x) & 255, Y = Math.floor(y) & 255; x -= Math.floor(x); y -= Math.floor(y); const u = fade(x), v = fade(y); const A = noisePerm[X] + Y, B = noisePerm[X + 1] + Y; return lerp(v, lerp(u, grad(noisePerm[A], x, y, 0), grad(noisePerm[B], x - 1, y, 0)), lerp(u, grad(noisePerm[A + 1], x, y - 1, 0), grad(noisePerm[B + 1], x - 1, y - 1, 0))); };
+const noise = (x, y) => { const X = Math.floor(x) & 255, Y = Math.floor(y) & 255; x -= Math.floor(x); y -= Math.floor(y); const u = fade(x), v = fade(y); const A = noisePerm[X] + Y, B = noisePerm[X + 1] + Y; return lerpFn(v, lerpFn(u, grad(noisePerm[A], x, y, 0), grad(noisePerm[B], x - 1, y, 0)), lerpFn(u, grad(noisePerm[A + 1], x, y - 1, 0), grad(noisePerm[B + 1], x - 1, y - 1, 0))); };
 function getTerrainHeight(x, z) { return noise(x*0.012, z*0.012)*30 + noise(x*0.04, z*0.04)*6; }
 
 class Chunk {
@@ -273,42 +362,50 @@ class Chunk {
         for(let i=0; i<=div; i++) {
             const p = pts[i]; const n = frames.binormals[i]; 
             
-            // 1. CARRETERA
+            // 1. CARRETERA (Continuous Ribbon)
             rV.push(
                 p.x + n.x * CONFIG.ROAD_WIDTH_HALF, p.y + CONFIG.ROAD_Y_OFFSET, p.z + n.z * CONFIG.ROAD_WIDTH_HALF,
                 p.x - n.x * CONFIG.ROAD_WIDTH_HALF, p.y + CONFIG.ROAD_Y_OFFSET, p.z - n.z * CONFIG.ROAD_WIDTH_HALF
             );
 
-            // 2. MUROS LATERALES
+            // 2. MUROS LATERALES (Solid Box)
             const yTop = p.y + CONFIG.ROAD_Y_OFFSET + CONFIG.WALL_HEIGHT;
             const yBot = p.y - 2.0;
+            
+            // Left
             const L_In = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
             const L_Out = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH));
             wV.push(L_In.x, yTop, L_In.z, L_In.x, yBot, L_In.z, L_Out.x, yTop, L_Out.z, L_Out.x, yBot, L_Out.z);
+            
+            // Right
             const R_In = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
             const R_Out = p.clone().add(n.clone().multiplyScalar(-(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH)));
             wV.push(R_In.x, yTop, R_In.z, R_In.x, yBot, R_In.z, R_Out.x, yTop, R_Out.z, R_Out.x, yBot, R_Out.z);
 
-            // 3. LÍNEAS LATERALES BLANCAS
+            // 3. LÍNEAS
             const distL = CONFIG.ROAD_WIDTH_HALF - 0.8;
             const sw = 0.4;
+            // Left White
             lV.push(p.x + n.x * distL, p.y + lineYOffset, p.z + n.z * distL); 
             lV.push(p.x + n.x * (distL+sw), p.y + lineYOffset, p.z + n.z * (distL+sw));
+            // Right White
             lV.push(p.x - n.x * distL, p.y + lineYOffset, p.z - n.z * distL);
             lV.push(p.x - n.x * (distL+sw), p.y + lineYOffset, p.z - n.z * (distL+sw));
-
-            // 4. LÍNEA CENTRAL AMARILLA
+            // Central Yellow
             const lw = 0.2;
             yV.push(p.x + n.x * lw, p.y + lineYOffset, p.z + n.z * lw);
             yV.push(p.x - n.x * lw, p.y + lineYOffset, p.z - n.z * lw);
         }
 
+        // Indices
         for(let i=0; i<div; i++) {
             const r = i * 2; rI.push(r, r+2, r+1, r+1, r+2, r+3);
             const w = i * 8; 
-            wI.push(w+0, w+8, w+2, w+2, w+8, w+10);
-            wI.push(w+0, w+1, w+8, w+1, w+9, w+8);
-            wI.push(w+2, w+10, w+3, w+3, w+10, w+11);
+            // Left Wall (In, Out)
+            wI.push(w+0, w+8, w+2, w+2, w+8, w+10); // Top
+            wI.push(w+0, w+1, w+8, w+1, w+9, w+8); // In
+            wI.push(w+2, w+10, w+3, w+3, w+10, w+11); // Out
+            // Right Wall
             wI.push(w+4, w+6, w+12, w+12, w+6, w+14);
             wI.push(w+4, w+12, w+5, w+5, w+12, w+13);
             wI.push(w+6, w+7, w+14, w+7, w+15, w+14);
@@ -323,6 +420,7 @@ class Chunk {
             }
         }
 
+        // Meshes
         const rG = new THREE.BufferGeometry();
         rG.setAttribute('position', new THREE.Float32BufferAttribute(rV, 3));
         rG.setIndex(rI); rG.computeVertexNormals();
@@ -338,13 +436,13 @@ class Chunk {
         const lG = new THREE.BufferGeometry();
         lG.setAttribute('position', new THREE.Float32BufferAttribute(lV, 3));
         lG.setIndex(lI);
-        this.group.add(new THREE.Mesh(lG, matLineWhite));
+        this.group.add(new THREE.Mesh(lG, matLineW));
 
         if(yI.length > 0) {
             const yG = new THREE.BufferGeometry();
             yG.setAttribute('position', new THREE.Float32BufferAttribute(yV, 3));
             yG.setIndex(yI);
-            this.group.add(new THREE.Mesh(yG, matLineYellow));
+            this.group.add(new THREE.Mesh(yG, matLineY));
         }
     }
 
@@ -385,25 +483,17 @@ class Chunk {
                 this.group.add(pil);
             }
         }
-        // DOBLE DE ÁRBOLES
         for(let i=0; i<20; i++) {
             const t = rng(); const side = rng() > 0.5 ? 1 : -1; const dist = CONFIG.ROAD_WIDTH_HALF + 15 + rng() * 60;
             const p = this.curve.getPointAt(t); const tan = this.curve.getTangentAt(t);
             const bin = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
             const pos = p.clone().add(bin.multiplyScalar(side * dist));
             const y = getTerrainHeight(pos.x, pos.z);
-            
             if(y > 0) {
                 const gr = new THREE.Group();
-                const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 10, 5), matWood); 
-                tr.position.y = 5; 
-                const lv = new THREE.Mesh(new THREE.ConeGeometry(3.5, 9, 5), matLeaves); 
-                lv.position.y = 10;
-                
-                gr.add(tr, lv); 
-                gr.position.set(pos.x, y - 2.0, pos.z); 
-                gr.scale.setScalar(0.8 + rng() * 0.5); 
-                gr.castShadow = true;
+                const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 10, 5), matWood); tr.position.y = 5;
+                const lv = new THREE.Mesh(new THREE.ConeGeometry(3.5, 9, 5), matLeaves); lv.position.y = 10;
+                gr.add(tr, lv); gr.position.set(pos.x, y - 2.0, pos.z); gr.scale.setScalar(0.8 + rng() * 0.5); gr.castShadow = true;
                 this.group.add(gr);
             }
         }
@@ -422,7 +512,6 @@ class Chunk {
             }
             const p = this.curve.getPointAt(0.5);
             cloud.position.set(p.x + (rng()-0.5)*400, 50 + rng()*40, p.z + (rng()-0.5)*400);
-            
             this.group.add(cloud);
             this.clouds.push(cloud);
         }
@@ -431,15 +520,9 @@ class Chunk {
     buildAtmosphere() {
         const pGeo = new THREE.BufferGeometry();
         const pPos = [];
-        const count = 250; 
-        for(let i=0; i<count; i++) {
-            const t = Math.random(); 
-            const p = this.curve.getPointAt(t);
-            pPos.push(
-                p.x + (Math.random()-0.5) * 120,
-                p.y + Math.random() * 40,
-                p.z + (Math.random()-0.5) * 120
-            );
+        for(let i=0; i<250; i++) {
+            const t = Math.random(); const p = this.curve.getPointAt(t);
+            pPos.push(p.x + (Math.random()-0.5)*120, p.y + Math.random()*40, p.z + (Math.random()-0.5)*120);
         }
         pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
         const parts = new THREE.Points(pGeo, matAtmosphere);
@@ -450,7 +533,7 @@ class Chunk {
 }
 
 // ==========================================
-// UTILS GEOMETRÍA
+// 6. UTILS GEOMETRÍA & COCHE
 // ==========================================
 function createGridGeometry(verts, colors, rows, cols) {
     const g = new THREE.BufferGeometry(); const idx = [];
@@ -465,10 +548,8 @@ function createGridGeometry(verts, colors, rows, cols) {
     return g;
 }
 
-// ==========================================
-// VEHÍCULO
-// ==========================================
 function createOutline(geo, scale) { const m = new THREE.Mesh(geo, matOutline); m.scale.multiplyScalar(scale); return m; }
+
 function createCar(colorStr) {
     const car = new THREE.Group();
     const matBody = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorStr), roughness: 0.2, metalness: 0.6 });
@@ -486,20 +567,12 @@ function createCar(colorStr) {
         const w = new THREE.Mesh(wGeo, matW); w.position.set(p[0], 0.4, p[1]); car.add(w);
         car.add(createOutline(wGeo, 1.05).translateX(p[0]).translateY(0.4).translateZ(p[1]));
     });
-
-    // LUCES TRASERAS (NUEVO)
+    
+    // Luces Traseras
     const tlGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
-    const tlLeft = new THREE.Mesh(tlGeo, matTailLight);
-    tlLeft.position.set(0.6, 0.7, -2.15); // Atrás izquierda
-    car.add(tlLeft);
-    const tlRight = new THREE.Mesh(tlGeo, matTailLight);
-    tlRight.position.set(-0.6, 0.7, -2.15); // Atrás derecha
-    car.add(tlRight);
-
-    // Glow luces traseras
-    const tlGlow = new THREE.PointLight(0xff0000, 2, 5);
-    tlGlow.position.set(0, 0.7, -2.5);
-    car.add(tlGlow);
+    const tl1 = new THREE.Mesh(tlGeo, matTailLight); tl1.position.set(0.6, 0.7, -2.15); car.add(tl1);
+    const tl2 = new THREE.Mesh(tlGeo, matTailLight); tl2.position.set(-0.6, 0.7, -2.15); car.add(tl2);
+    const tlGlow = new THREE.PointLight(0xff0000, 2, 5); tlGlow.position.set(0, 0.7, -2.5); car.add(tlGlow);
 
     return car;
 }
@@ -517,7 +590,7 @@ function getTrackData(dist) {
             const t = (dist - c.startDist) / c.length;
             const pos = c.curve.getPointAt(t);
             const tan = c.curve.getTangentAt(t).normalize();
-            const up = new THREE.Vector3(0, 1, 0);
+            const up = new THREE.Vector3(0,1,0);
             const right = new THREE.Vector3().crossVectors(tan, up).normalize();
             return { pos, tan, right };
         }
@@ -525,118 +598,149 @@ function getTrackData(dist) {
     return null;
 }
 
-function updateWorldState(data) {
-    if(!scene) return;
-    data.forEach(pData => {
-        const pid = pData.i;
-        if(!state.players[pid]) {
-            const mesh = createCar(pData.c); scene.add(mesh);
-            if(pid === state.myId) {
-                const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5);
-                hl.position.set(0, 1.5, 2); hl.target.position.set(0, 0, 20);
-                mesh.add(hl); mesh.add(hl.target);
-            }
-            state.players[pid] = { mesh: mesh };
+// ==========================================
+// 7. BUCLE PRINCIPAL (PHYSICS + RENDER)
+// ==========================================
+let lastTime = performance.now();
+let frames = 0, lastFpsTime = 0;
+const COLORS = { night: new THREE.Color(0x020205), dawn: new THREE.Color(0xFD5E53), day: new THREE.Color(0x00BFFF), dusk: new THREE.Color(0x4B0082) };
+
+function animate() {
+    requestAnimationFrame(animate);
+    const now = performance.now();
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+
+    frames++;
+    if(now - lastFpsTime >= 1000) { ui.fps.innerText = "FPS: " + frames; frames=0; lastFpsTime=now; }
+
+    if(state.inGame) {
+        // --- FÍSICAS (CLIENTE) ---
+        const maxSpeed = state.settings.maxSpeed / 100.0; 
+        const accel = (state.settings.accel / 100.0) * dt * 2.0;
+        
+        if(state.input.gas) {
+            if(state.manualSpeed < maxSpeed) state.manualSpeed += accel;
+        } else if(state.input.brake) {
+            state.manualSpeed -= accel * 2.5;
+        } else {
+            state.manualSpeed *= 0.99;
         }
-        const playerObj = state.players[pid];
-        const trackInfo = getTrackData(pData.d);
-        if(trackInfo) {
-            const finalPos = trackInfo.pos.clone();
-            finalPos.add(trackInfo.right.multiplyScalar(pData.l)); 
-            finalPos.y += 0.05; 
-            playerObj.mesh.position.lerp(finalPos, 0.3);
-            const lookTarget = finalPos.clone().add(trackInfo.tan);
-            playerObj.mesh.lookAt(lookTarget);
-            if(pid === state.myId) {
-                ui.speed.innerText = Math.floor(pData.s * 100);
-                const offset = new THREE.Vector3(0, 6, -12); offset.applyQuaternion(playerObj.mesh.quaternion);
-                const camPos = playerObj.mesh.position.clone().add(offset);
-                camera.position.lerp(camPos, 0.1); camera.lookAt(playerObj.mesh.position.clone().add(new THREE.Vector3(0, 2, 0)));
-                const distToEnd = chunks[chunks.length-1].endDist - pData.d;
-                if(distToEnd < 600) spawnChunk();
-                if(chunks.length > CONFIG.VISIBLE_CHUNKS) { chunks[0].dispose(); chunks.shift(); }
+        if(state.manualSpeed < 0) state.manualSpeed = 0;
+
+        const baseSens = 0.02 + (state.settings.sens / 100.0) * 0.05; 
+        const stiff = (state.settings.stiffness / 100.0) * 5.0; 
+        const turnSens = baseSens / (1.0 + (state.manualSpeed * stiff));
+        
+        state.worldHeading += (-state.input.steer) * turnSens * (state.manualSpeed * 30.0 * dt);
+
+        const moveX = Math.sin(state.worldHeading) * state.manualSpeed;
+        const moveZ = Math.cos(state.worldHeading) * state.manualSpeed;
+        
+        // PROYECCIÓN
+        const curData = getTrackData(state.trackDist);
+        if(curData) {
+            const moveVec = new THREE.Vector3(moveX, 0, moveZ);
+            state.trackDist += moveVec.dot(curData.tan);
+            state.lateralOffset += moveVec.dot(curData.right);
+
+            if(Math.abs(state.lateralOffset) > CONFIG.WALL_LIMIT) {
+                const roadAngle = Math.atan2(curData.tan.x, curData.tan.z);
+                let rel = state.worldHeading - roadAngle;
+                while(rel > Math.PI) rel -= Math.PI*2; while(rel < -Math.PI) rel += Math.PI*2;
+                state.lateralOffset = Math.sign(state.lateralOffset) * CONFIG.WALL_LIMIT;
+                state.worldHeading = roadAngle + (-rel * 0.5);
+                state.manualSpeed *= 0.6;
             }
-            if(pData.s > 0.3 && Math.random() > 0.7) {
+        }
+
+        // UPDATE VISUAL LOCAL
+        const finalData = getTrackData(state.trackDist);
+        if(finalData) {
+            const pos = finalData.pos.clone();
+            pos.add(finalData.right.multiplyScalar(state.lateralOffset));
+            pos.y += CONFIG.ROAD_Y_OFFSET + 0.05;
+
+            mainCar.position.copy(pos);
+            mainCar.rotation.set(0, state.worldHeading, 0);
+
+            // CAMERA
+            const backVec = new THREE.Vector3(-Math.sin(state.worldHeading), 0, -Math.cos(state.worldHeading));
+            const camTarget = pos.clone().add(backVec.multiplyScalar(18));
+            camTarget.y += 7;
+            camera.position.lerp(camTarget, 0.1);
+            camera.lookAt(pos.clone().add(new THREE.Vector3(0, 2, 0)));
+
+            const distToEnd = chunks[chunks.length-1].endDist - state.trackDist;
+            if(distToEnd < 600) spawnChunk();
+            if(chunks.length > CONFIG.VISIBLE_CHUNKS) { chunks[0].dispose(); chunks.shift(); }
+        }
+
+        ui.speed.innerText = Math.floor(state.manualSpeed * 100);
+
+        // ENVIAR ESTADO
+        socket.emit('myState', {
+            d: parseFloat(state.trackDist.toFixed(2)),
+            l: parseFloat(state.lateralOffset.toFixed(2)),
+            s: parseFloat(state.manualSpeed.toFixed(3)),
+            h: parseFloat(state.worldHeading.toFixed(3))
+        });
+
+        // ENTORNO
+        const tEnv = now * 0.00005;
+        const carPos = mainCar.position;
+        sunLight.position.set(carPos.x + Math.cos(tEnv)*1500, Math.sin(tEnv)*1500, carPos.z);
+        sunLight.target.position.copy(carPos); moonLight.position.set(carPos.x - Math.cos(tEnv)*1500, -Math.sin(tEnv)*1500, carPos.z);
+        chunks.forEach(c => c.clouds.forEach(cl => cl.position.z += 0.2));
+        
+        const sin = Math.sin(tEnv);
+        let target = new THREE.Color();
+        let opStars = 0;
+        if (sin < -0.4) { target.copy(COLORS.night); opStars = 1; } 
+        else if (sin < 0.1) { const t=(sin+0.4)/0.5; target.copy(COLORS.night).lerp(COLORS.dawn, t); opStars=1-t; }
+        else if (sin < 0.4) { const t=(sin-0.1)/0.3; target.copy(COLORS.dawn).lerp(COLORS.day, t); opStars=0; }
+        else if (sin < 0.8) { target.copy(COLORS.day); opStars=0; }
+        else { const t=(sin-0.8)/0.2; target.copy(COLORS.day).lerp(COLORS.dusk, t); opStars=t*0.5; }
+        
+        scene.background = target; scene.fog.color.copy(target);
+        starField.material.opacity = opStars; starField.position.copy(carPos);
+        ambientLight.intensity = Math.max(0.2, sin + 0.5);
+
+        for(let i=smokeParticles.length-1; i>=0; i--) {
+            const p = smokeParticles[i]; p.position.add(p.userData.vel); p.scale.addScalar(0.05); p.userData.life -= 0.02; p.material.opacity = p.userData.life * 0.4;
+            if(p.userData.life <= 0) { smokeGroup.remove(p); smokeParticles.splice(i,1); }
+        }
+        composer.render();
+    }
+}
+
+function updateRemotePlayers(data) {
+    data.forEach(p => {
+        if(p.i === state.myId) return;
+        if(!state.players[p.i]) {
+            const mesh = createCar(p.c); scene.add(mesh); state.players[p.i] = { mesh: mesh };
+        }
+        const other = state.players[p.i];
+        const tData = getTrackData(p.d);
+        if(tData) {
+            const pos = tData.pos.clone().add(tData.right.multiplyScalar(p.l));
+            pos.y += CONFIG.ROAD_Y_OFFSET + 0.05;
+            other.mesh.position.lerp(pos, 0.3);
+            
+            const curRot = other.mesh.rotation.y;
+            let tgtRot = p.h;
+            if(tgtRot - curRot > Math.PI) tgtRot -= Math.PI*2;
+            if(tgtRot - curRot < -Math.PI) tgtRot += Math.PI*2;
+            other.mesh.rotation.y += (tgtRot - curRot) * 0.2;
+
+            if(p.s > 0.3 && Math.random() > 0.7) {
                 const s = new THREE.Mesh(new THREE.DodecahedronGeometry(0.3,0), new THREE.MeshStandardMaterial({color:0xaaaaaa, transparent:true, opacity:0.4}));
-                s.position.copy(playerObj.mesh.position).add(new THREE.Vector3((Math.random()-0.5), 0.2, -2));
+                s.position.copy(other.mesh.position).add(new THREE.Vector3((Math.random()-0.5), 0.2, -2));
                 s.userData = { vel: new THREE.Vector3(0, 0.1, -0.2), life: 1.0 }; s.scale.setScalar(0.5);
                 smokeGroup.add(s); smokeParticles.push(s);
             }
         }
     });
-}
-
-// ==========================================
-// CICLO DÍA / NOCHE PROGRESIVO
-// ==========================================
-const COLORS = {
-    night: new THREE.Color(0x020205),
-    dawn: new THREE.Color(0xFD5E53),  
-    day: new THREE.Color(0x00BFFF),   
-    dusk: new THREE.Color(0x4B0082)   
-};
-
-function animate() {
-    requestAnimationFrame(animate);
-    if(state.inGame) {
-        socket.emit('playerInput', state.input);
-        
-        // MOVIMIENTO DE NUBES (HACIA EL SUR / +Z)
-        chunks.forEach(chunk => {
-            if(chunk.clouds) {
-                chunk.clouds.forEach(c => {
-                    c.position.z += 0.2; 
-                });
-            }
-        });
-
-        const time = Date.now() * 0.00005; 
-        if(state.players[state.myId]) {
-            const carPos = state.players[state.myId].mesh.position;
-            
-            sunLight.position.set(carPos.x + Math.cos(time)*1500, Math.sin(time)*1500, carPos.z);
-            sunLight.target.position.copy(carPos); sunMesh.position.copy(sunLight.position);
-            moonLight.position.set(carPos.x - Math.cos(time)*1500, -Math.sin(time)*1500, carPos.z);
-            moonMesh.position.copy(moonLight.position);
-
-            const sin = Math.sin(time);
-            let target = new THREE.Color();
-            let opacityStars = 0;
-
-            if (sin < -0.4) { 
-                target.copy(COLORS.night); 
-                opacityStars = 1; 
-            } else if (sin < 0.1) {
-                const t = (sin + 0.4) / 0.5;
-                target.copy(COLORS.night).lerp(COLORS.dawn, t);
-                opacityStars = 1 - t;
-            } else if (sin < 0.4) {
-                const t = (sin - 0.1) / 0.3;
-                target.copy(COLORS.dawn).lerp(COLORS.day, t);
-                opacityStars = 0;
-            } else if (sin < 0.8) {
-                target.copy(COLORS.day);
-                opacityStars = 0;
-            } else {
-                const t = (sin - 0.8) / 0.2;
-                target.copy(COLORS.day).lerp(COLORS.dusk, t);
-                opacityStars = t * 0.5;
-            }
-
-            scene.background = target;
-            scene.fog.color.copy(target);
-            starField.material.opacity = opacityStars;
-            starField.position.copy(carPos);
-            const ambInt = Math.max(0.2, sin + 0.5);
-            ambientLight.intensity = ambInt;
-        }
-
-        for(let i=smokeParticles.length-1; i>=0; i--) {
-            const p = smokeParticles[i]; p.position.add(p.userData.vel); p.scale.addScalar(0.05); p.userData.life -= 0.02; p.material.opacity = p.userData.life * 0.4;
-            if(p.userData.life <= 0) { smokeGroup.remove(p); smokeParticles.splice(i, 1); }
-        }
-        composer.render();
-    }
 }
 
 // INPUTS
@@ -649,7 +753,7 @@ function handleJoyMove(clientX) {
 joyZone.addEventListener('touchstart', e => { e.preventDefault(); joyId = e.changedTouches[0].identifier; const rect = joyZone.getBoundingClientRect(); joyCenter.x = rect.left; joyCenter.width = rect.width; handleJoyMove(e.changedTouches[0].clientX); });
 joyZone.addEventListener('touchmove', e => { e.preventDefault(); for(let i=0; i<e.changedTouches.length; i++) if(e.changedTouches[i].identifier === joyId) handleJoyMove(e.changedTouches[i].clientX); });
 joyZone.addEventListener('touchend', e => { e.preventDefault(); joyId = null; joyKnob.style.transform = `translate(-50%, -50%)`; state.input.steer = 0; });
-const bindBtn = (id, key) => { const el = document.getElementById(id); const set = (v) => { state.input[key] = v; el.style.transform = v ? 'scale(0.9)' : 'scale(1)'; el.style.opacity = v ? '1' : '0.8'; }; el.addEventListener('touchstart', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('touchend', (e)=>{ e.preventDefault(); set(false); }); el.addEventListener('mousedown', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('mouseup', (e)=>{ e.preventDefault(); set(false); }); };
+const bindBtn = (id, key) => { const el = document.getElementById(id); const set = (v) => { state.input[key] = v; el.style.transform = v?'scale(0.9)':'scale(1)'; el.style.opacity = v?'1':'0.8'; }; el.addEventListener('touchstart', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('touchend', (e)=>{ e.preventDefault(); set(false); }); el.addEventListener('mousedown', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('mouseup', (e)=>{ e.preventDefault(); set(false); }); };
 bindBtn('gas-btn', 'gas'); bindBtn('brake-btn', 'brake');
 window.addEventListener('keydown', e => { if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = true; if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = true; if(e.key === 'ArrowLeft' || e.key === 'a') state.input.steer = 1; if(e.key === 'ArrowRight' || e.key === 'd') state.input.steer = -1; });
 window.addEventListener('keyup', e => { if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = false; if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = false; if(['ArrowLeft','ArrowRight','a','d'].includes(e.key)) state.input.steer = 0; });
