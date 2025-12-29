@@ -25,15 +25,17 @@ io.on('connection', (socket) => {
             host: socket.id,
             config: { maxSpeed: 500, accel: 40 },
             seed: Math.floor(Math.random() * 999999) + 1,
-            count: 0 // Contador para asignar letras A, B, C...
+            count: 0 
         };
         const pInfo = joinPlayer(socket, roomId);
+        
         socket.emit('roomCreated', { 
             roomId, 
             seed: rooms[roomId].seed,
             isHost: true,
             config: rooms[roomId].config,
-            label: pInfo.label // Enviamos su nombre al creador
+            label: pInfo.label,
+            color: pInfo.color // <--- ENVIAMOS EL COLOR AL CREADOR
         });
     });
 
@@ -48,7 +50,8 @@ io.on('connection', (socket) => {
                 seed: rooms[roomId].seed,
                 isHost: false,
                 config: rooms[roomId].config,
-                label: pInfo.label // Enviamos su nombre al unirse
+                label: pInfo.label,
+                color: pInfo.color // <--- ENVIAMOS EL COLOR AL UNIRSE
             });
         } else {
             socket.emit('errorMsg', 'Sala no encontrada');
@@ -97,17 +100,20 @@ function joinPlayer(socket, roomId) {
     socket.data.room = roomId;
     socket.join(roomId);
     
-    // Asignar Letra (A, B, C...)
+    // Asignar Letra
     const index = rooms[roomId].count % 26;
     const letter = String.fromCharCode(65 + index);
     const label = `PLAYER ${letter}`;
     rooms[roomId].count++;
 
+    // Asignar Color Aleatorio
     const hue = Math.floor(Math.random() * 360);
+    const color = `hsl(${hue}, 100%, 50%)`;
+
     const pData = {
         id: socket.id,
         label: label,
-        color: `hsl(${hue}, 100%, 50%)`,
+        color: color,
         state: { d: 0, l: 0, s: 0, h: 0 }
     };
     
@@ -125,12 +131,12 @@ setInterval(() => {
             if(p.state) {
                 pack.push({
                     i: p.id,
-                    n: p.label, // Nombre (Player A)
+                    n: p.label,
+                    c: p.color, // Color para pintar rivales
                     d: p.state.d,
                     l: p.state.l,
                     s: p.state.s,
-                    h: p.state.h,
-                    c: p.color
+                    h: p.state.h
                 });
             }
         }
