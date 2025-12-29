@@ -18,12 +18,10 @@ function log(msg, type='info') {
     }
 }
 window.onerror = function(msg, url, line) {
-    log(`ERROR: ${msg} (Line ${line})`, 'error');
+    log(`ERROR: ${msg} (Línea ${line})`, 'error');
     if(debugUI) debugUI.style.display = 'block';
     return false;
 };
-
-log("Cargando script principal...");
 
 // ==========================================
 // 1. CONFIG & STATE
@@ -42,7 +40,8 @@ const state = {
     inGame: false,
     myId: null,
     isHost: false,
-    myLabel: "PILOTO",
+    myLabel: "YO",
+    myColor: "#ffffff", // Color asignado por servidor
     players: {}, 
     manualSpeed: 0.0,
     worldHeading: 0.0,
@@ -58,9 +57,8 @@ const state = {
 };
 
 // ==========================================
-// 2. RNG & NOISE (MOVIDO AL INICIO)
+// 2. RNG & NOISE
 // ==========================================
-// Definimos esto aquí para evitar errores de referencia
 const noisePerm = new Uint8Array(512); 
 const p = new Uint8Array(256);
 
@@ -79,13 +77,12 @@ function initNoise() {
     for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
     for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 }
-
-// Inicialización de respaldo
+// Init fallback
 for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256);
 for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 
 function setSeed(s) { 
-    log(`Semilla establecida: ${s}`);
+    log(`Semilla: ${s}`);
     rng = mulberry32(s); 
     initNoise();
 }
@@ -114,7 +111,7 @@ const ui = {
     brakeBtn: document.getElementById('brake-btn'),
     leaderboard: document.getElementById('leaderboard'),
     
-    // Config Inputs
+    // Config
     optMaxSpeed: document.getElementById('opt-max-speed'), dispMaxSpeed: document.getElementById('disp-max-speed'),
     optAccel: document.getElementById('opt-accel'), dispAccel: document.getElementById('disp-accel'),
     optSens: document.getElementById('opt-sens'), dispSens: document.getElementById('disp-sens'),
@@ -152,29 +149,29 @@ ui.chkPing.onchange = (e) => ui.ping.style.display = e.target.checked ? 'block' 
 ui.chkLb.onchange = (e) => ui.leaderboard.style.display = e.target.checked ? 'flex' : 'none';
 
 document.getElementById('btn-connect').onclick = () => {
-    log("Iniciando conexión...");
+    log("Conectando...");
     document.getElementById('status').innerText = "CONECTANDO...";
     document.getElementById('status').style.color = "#0af";
     socket = io(); setupSocket();
 };
-document.getElementById('btn-create').onclick = () => { log("Creando sala..."); socket.emit('createRoom'); };
+document.getElementById('btn-create').onclick = () => { log("Crear sala..."); socket.emit('createRoom'); };
 document.getElementById('btn-refresh').onclick = () => socket.emit('getRooms');
 document.getElementById('btn-join').onclick = () => { const c = document.getElementById('inp-code').value; if(c) socket.emit('joinRoom', c); };
-window.joinRoomId = (id) => { log(`Uniéndose a ${id}...`); socket.emit('joinRoom', id); };
+window.joinRoomId = (id) => { log(`Uniendo a ${id}...`); socket.emit('joinRoom', id); };
 
 function setupSocket() {
     socket.on('connect', () => { 
         log("Conectado. ID: " + socket.id);
         state.myId = socket.id; ui.login.style.display = 'none'; ui.lobby.style.display = 'flex'; socket.emit('getRooms'); 
     });
-    socket.on('disconnect', () => log("Desconectado del servidor.", 'error'));
+    socket.on('disconnect', () => log("Desconectado.", 'error'));
     socket.on('roomList', (list) => {
         ui.roomList.innerHTML = '';
         if(list.length===0) ui.roomList.innerHTML = '<div style="padding:10px;color:#666">NO HAY SALAS</div>';
         list.forEach(r => { ui.roomList.innerHTML += `<div class="room-item"><span>${r.id} (${r.players}/8)</span><button class="main-btn secondary" onclick="window.joinRoomId('${r.id}')" style="width:auto;padding:5px;font-size:0.7rem;margin:0;">ENTRAR</button></div>`; });
     });
-    socket.on('roomCreated', d => { log("Sala creada OK."); startGame(d); });
-    socket.on('roomJoined', d => { log("Unido a sala OK."); startGame(d); });
+    socket.on('roomCreated', d => { log("Sala OK."); startGame(d); });
+    socket.on('roomJoined', d => { log("Unido OK."); startGame(d); });
     socket.on('errorMsg', msg => log("Error: " + msg, 'error'));
     socket.on('configUpdated', cfg => {
         state.settings.maxSpeed = cfg.maxSpeed; state.settings.accel = cfg.accel;
@@ -192,12 +189,11 @@ function startGame(data) {
         state.seed = data.seed || 1234;
         state.isHost = !!data.isHost;
         state.myLabel = data.label || "PILOTO";
+        state.myColor = data.color || "#ffffff"; // COLOR DEL SERVIDOR
         
-        // Safeguard config
         const cfg = data.config || { maxSpeed: 500, accel: 40 };
         state.settings.maxSpeed = cfg.maxSpeed;
         state.settings.accel = cfg.accel;
-        
         ui.optMaxSpeed.value = state.settings.maxSpeed; ui.dispMaxSpeed.innerText = state.settings.maxSpeed;
         ui.optAccel.value = state.settings.accel; ui.dispAccel.innerText = state.settings.accel;
 
@@ -207,18 +203,17 @@ function startGame(data) {
         setSeed(state.seed);
         ui.lobby.style.display = 'none'; ui.loading.style.display = 'flex';
         
-        log("Cargando Motor 3D...");
-        // Pequeño timeout para asegurar que el DOM refresca
+        log("Iniciando Motor...");
         setTimeout(() => { 
             initThreeJS(); 
             ui.loading.style.display = 'none'; 
             ui.game.style.display = 'block'; 
             state.inGame = true; 
-            log("Juego Iniciado.");
+            log("Juego Listo.");
             animate(); 
         }, 500);
     } catch(e) {
-        log("Error en startGame: " + e.message, 'error');
+        log("Start Error: " + e.message, 'error');
     }
 }
 
@@ -230,7 +225,6 @@ let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = [];
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
-// Materiales
 const matRoad = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }); 
 const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
 const matLineY = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide, depthWrite: false });
@@ -262,16 +256,16 @@ function initThreeJS() {
         setupEnvironment();
         smokeGroup = new THREE.Group(); scene.add(smokeGroup);
         
-        const hue = Math.floor(Math.random()*360);
-        mainCar = createCar(`hsl(${hue}, 100%, 50%)`); scene.add(mainCar);
+        // Crear mi coche con el color asignado por el servidor
+        mainCar = createCar(state.myColor); 
+        scene.add(mainCar);
         const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5); hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20); mainCar.add(hl); mainCar.add(hl.target);
 
         chunks = []; state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
-        log("Generando chunks...");
         for(let i=0; i<CONFIG.VISIBLE_CHUNKS; i++) spawnChunk();
         const startData = getTrackData(0); if(startData) state.worldHeading = Math.atan2(startData.tan.x, startData.tan.z);
     } catch(e) {
-        log("Error ThreeJS: " + e.message, 'error');
+        log("Init 3D Error: " + e.message, 'error');
         throw e;
     }
 }
@@ -429,7 +423,7 @@ class Chunk {
                 const gr = new THREE.Group();
                 const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 12, 5), matWood); tr.position.y = 6;
                 const lv = new THREE.Mesh(new THREE.ConeGeometry(3.5, 9, 5), matLeaves); lv.position.y = 11;
-                gr.add(tr, lv); gr.position.set(pos.x, y - 4.0, pos.z); // HUNDIR 4M
+                gr.add(tr, lv); gr.position.set(pos.x, y - 4.0, pos.z); 
                 gr.scale.setScalar(0.8 + rng() * 0.5); gr.castShadow = true;
                 this.group.add(gr);
             }
@@ -464,7 +458,7 @@ class Chunk {
         pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
         const parts = new THREE.Points(pGeo, matAtmosphere);
         this.group.add(parts);
-        this.atmosphere = parts;
+        this.atmosphere = parts; 
     }
 
     dispose() { scene.remove(this.group); this.group.traverse(o => { if(o.geometry) o.geometry.dispose(); }); }
@@ -487,7 +481,6 @@ function createOutline(geo, scale) { const m = new THREE.Mesh(geo, matOutline); 
 
 function createCar(colorStr) {
     const car = new THREE.Group();
-    // Fallback si colorStr falla
     let col = 0xffffff;
     try { col = new THREE.Color(colorStr); } catch(e) {}
     
@@ -515,27 +508,6 @@ function createCar(colorStr) {
     return car;
 }
 
-function spawnChunk() {
-    const idx = chunks.length > 0 ? chunks[chunks.length-1].index + 1 : 0;
-    const c = new Chunk(idx, state.worldGenState.point, state.worldGenState.angle, state.worldGenState.dist);
-    chunks.push(c);
-    state.worldGenState.point = c.endPoint; state.worldGenState.angle = c.endAngle; state.worldGenState.dist += c.length;
-}
-
-function getTrackData(dist) {
-    for(let c of chunks) {
-        if(dist >= c.startDist && dist < c.endDist) {
-            const t = (dist - c.startDist) / c.length;
-            const pos = c.curve.getPointAt(t);
-            const tan = c.curve.getTangentAt(t).normalize();
-            const up = new THREE.Vector3(0,1,0);
-            const right = new THREE.Vector3().crossVectors(tan, up).normalize();
-            return { pos, tan, right };
-        }
-    }
-    return null;
-}
-
 // ==========================================
 // 7. BUCLE PRINCIPAL
 // ==========================================
@@ -552,7 +524,6 @@ function animate() {
     frames++; if(now - lastFpsTime >= 1000) { ui.fps.innerText = "FPS: " + frames; frames=0; lastFpsTime=now; }
 
     if(state.inGame) {
-        // FÍSICAS LOCALES
         const maxSpeed = state.settings.maxSpeed / 100.0; const accel = (state.settings.accel / 100.0) * dt * 2.0;
         if(state.input.gas) { if(state.manualSpeed < maxSpeed) state.manualSpeed += accel; } 
         else if(state.input.brake) { state.manualSpeed -= accel * 2.5; } else { state.manualSpeed *= 0.99; }
@@ -574,10 +545,10 @@ function animate() {
             }
         }
 
-        // COLISIONES ENTRE COCHES (CLIENTE)
+        // COLISIONES CLIENTE
         for (const pid in state.players) {
             const p = state.players[pid];
-            if (p.lastData) { // Usamos último dato recibido
+            if (p.lastData) {
                 const dDist = state.trackDist - p.lastData.d;
                 const dLat = state.lateralOffset - p.lastData.l;
                 if (Math.abs(dDist) < 4.5 && Math.abs(dLat) < 2.2) {
@@ -589,7 +560,6 @@ function animate() {
             }
         }
 
-        // UPDATE VISUAL
         const finalData = getTrackData(state.trackDist);
         if(finalData) {
             const pos = finalData.pos.clone(); pos.add(finalData.right.multiplyScalar(state.lateralOffset)); pos.y += CONFIG.ROAD_Y_OFFSET + 0.05;
@@ -609,10 +579,10 @@ function animate() {
         ui.speed.innerText = Math.floor(state.manualSpeed * 100);
         socket.emit('myState', { d: parseFloat(state.trackDist.toFixed(2)), l: parseFloat(state.lateralOffset.toFixed(2)), s: parseFloat(state.manualSpeed.toFixed(3)), h: parseFloat(state.worldHeading.toFixed(3)) });
 
-        // ENTORNO
         const tEnv = now * 0.00005; const carPos = mainCar.position;
         sunLight.position.set(carPos.x + Math.cos(tEnv)*1500, Math.sin(tEnv)*1500, carPos.z); sunLight.target.position.copy(carPos);
         moonLight.position.set(carPos.x - Math.cos(tEnv)*1500, -Math.sin(tEnv)*1500, carPos.z);
+        
         chunks.forEach(c => {
             c.clouds.forEach(cl => cl.position.z += 0.2);
             if(c.atmosphere) {
@@ -632,14 +602,15 @@ function animate() {
 }
 
 function updateRemotePlayers(data) {
-    const racers = [{ label: state.myLabel, dist: state.trackDist, isMe: true }];
+    // AÑADIR COLOR AL PANEL
+    const racers = [{ label: state.myLabel, dist: state.trackDist, isMe: true, color: state.myColor }];
     data.forEach(p => {
         if(p.i === state.myId) return;
-        racers.push({ label: p.n || "RIVAL", dist: p.d, isMe: false });
+        racers.push({ label: p.n, dist: p.d, isMe: false, color: p.c });
+        
         if(!state.players[p.i]) { const mesh = createCar(p.c); scene.add(mesh); state.players[p.i] = { mesh: mesh }; }
         const other = state.players[p.i];
-        other.lastData = p; // Guardar para colisiones
-        
+        other.lastData = p; 
         const tData = getTrackData(p.d);
         if(tData) {
             const pos = tData.pos.clone().add(tData.right.multiplyScalar(p.l)); pos.y += CONFIG.ROAD_Y_OFFSET + 0.05;
@@ -659,7 +630,8 @@ function updateRemotePlayers(data) {
     racers.forEach((r, idx) => {
         const cls = r.isMe ? 'lb-row lb-me' : 'lb-row';
         let valText = idx === 0 ? (r.dist / 2000).toFixed(2) + ' KM' : ((r.dist - leaderDist) / 2000).toFixed(3) + ' KM';
-        html += `<div class="${cls}"><span class="lb-name">${idx+1}. ${r.label}</span><span class="lb-val">${valText}</span></div>`;
+        // APLICAR COLOR AL NOMBRE
+        html += `<div class="${cls}"><span class="lb-name" style="color:${r.color}">${idx+1}. ${r.label}</span><span class="lb-val">${valText}</span></div>`;
     });
     ui.leaderboard.innerHTML = html;
 }
