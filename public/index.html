@@ -3,294 +3,149 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-    <title>Photonik V19 Online</title>
+    <title>Photonik V20 Online</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap');
-
-        body { 
-            margin: 0; overflow: hidden; 
-            background-color: #050510; 
-            font-family: 'Rajdhani', sans-serif; 
-            user-select: none; -webkit-user-select: none; 
-            color: white; 
-        }
+        body { margin: 0; overflow: hidden; background-color: #050510; font-family: 'Rajdhani', sans-serif; user-select: none; -webkit-user-select: none; color: white; }
         
-        /* UI LAYERS */
         #game-ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; display:none; }
         .pointer-auto { pointer-events: auto; }
+        .screen { position: absolute; top:0; left:0; width:100%; height:100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(circle at center, #1a1a2e 0%, #000000 100%); z-index: 20; }
+
+        /* PANELES */
+        .panel { background: rgba(10, 10, 20, 0.85); padding: 40px; border-radius: 4px; border: 1px solid rgba(0, 150, 255, 0.3); text-align: center; width: 90%; max-width: 420px; backdrop-filter: blur(12px); box-shadow: 0 0 30px rgba(0, 100, 255, 0.1); position: relative; clip-path: polygon(0 0, 100% 0, 100% 90%, 95% 100%, 0 100%); }
+        h1 { margin: 0; font-family: 'Orbitron', sans-serif; font-size: 3.5rem; background: linear-gradient(180deg, #fff, #0af); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-style: italic; letter-spacing: -2px; transform: skewX(-10deg); }
+        .subtitle { color: #0af; margin-bottom: 30px; letter-spacing: 6px; font-size: 14px; font-weight: 700; }
+
+        /* BOTONES */
+        .main-btn { background: linear-gradient(90deg, #0044cc, #0088ff); border: none; padding: 15px; color: #fff; font-family: 'Orbitron'; font-weight: 700; font-size: 1.1rem; cursor: pointer; margin: 10px 0; width: 100%; text-transform: uppercase; clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px); pointer-events: auto; }
+        .main-btn:active { transform: scale(0.98); background: white; color: black; }
+        .secondary { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); width: 48%; display: inline-block; font-size: 0.9rem; }
         
-        .screen { 
-            position: absolute; top:0; left:0; width:100%; height:100%; 
-            display: flex; flex-direction: column; align-items: center; justify-content: center; 
-            background: radial-gradient(circle at center, #1a1a2e 0%, #000000 100%); 
-            z-index: 20; 
-        }
-
-        /* ESTILO CYBERPUNK PARA PANELES */
-        .panel { 
-            background: rgba(10, 10, 20, 0.85); 
-            padding: 40px; 
-            border-radius: 4px; 
-            border: 1px solid rgba(0, 150, 255, 0.3); 
-            text-align: center; 
-            width: 90%; max-width: 420px; 
-            backdrop-filter: blur(12px); 
-            box-shadow: 0 0 30px rgba(0, 100, 255, 0.1), inset 0 0 20px rgba(0,0,0,0.5);
-            position: relative;
-            clip-path: polygon(0 0, 100% 0, 100% 90%, 95% 100%, 0 100%);
-        }
+        input.code-input { background: rgba(0,0,0,0.6); border: 1px solid #444; border-bottom: 2px solid #0af; padding: 15px; color: white; width: 100%; box-sizing: border-box; text-align: center; font-size: 1.5rem; letter-spacing: 5px; margin-bottom: 10px; text-transform: uppercase; outline: none; pointer-events: auto; font-family: 'Orbitron'; }
         
-        .panel::before {
-            content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 2px;
-            background: linear-gradient(90deg, transparent, #00aaff, transparent);
-        }
-
-        h1 { 
-            margin: 0 0 5px 0; 
-            font-family: 'Orbitron', sans-serif; 
-            font-size: 3.8rem; 
-            font-weight: 900;
-            background: linear-gradient(180deg, #fff, #0af); 
-            -webkit-background-clip: text; 
-            -webkit-text-fill-color: transparent; 
-            font-style: italic; 
-            letter-spacing: -2px; 
-            text-shadow: 0 0 20px rgba(0, 150, 255, 0.5);
-            transform: skewX(-10deg);
-        }
+        /* MENU LATERAL */
+        #menu-btn { position: absolute; top: 20px; right: 20px; width: 50px; height: 50px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 24px; cursor: pointer; pointer-events: auto; backdrop-filter: blur(5px); z-index: 100; }
+        #menu-modal { position: absolute; top: 80px; right: 20px; background: rgba(10, 15, 20, 0.95); border: 1px solid #333; border-left: 3px solid #0af; padding: 20px; width: 280px; display: none; flex-direction: column; gap: 12px; pointer-events: auto; z-index: 99; max-height: 80vh; overflow-y: auto; }
         
-        .subtitle {
-            color: #0af; 
-            margin-bottom: 30px; 
-            letter-spacing: 6px; 
-            font-size: 14px; 
-            font-weight: 700;
-            text-transform: uppercase;
-            opacity: 0.8;
-        }
-
-        /* BOTONES CYBER */
-        .main-btn { 
-            background: linear-gradient(90deg, #0044cc, #0088ff); 
-            border: none; 
-            padding: 18px; 
-            color: #fff; 
-            font-family: 'Orbitron', sans-serif;
-            font-weight: 700; 
-            font-size: 1.1rem; 
-            cursor: pointer; 
-            margin: 12px 0; 
-            width: 100%; 
-            text-transform: uppercase; 
-            letter-spacing: 2px; 
-            transition: 0.2s; 
-            pointer-events: auto; 
-            clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
-            position: relative;
-            overflow: hidden;
-        }
+        .menu-header { color:#0af; font-family:'Orbitron'; font-size:12px; margin-top:10px; border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:5px; }
+        .menu-option { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #ccc; }
+        .val-disp { color: #0af; font-weight: bold; font-family: monospace; width: 40px; text-align: right;}
         
-        .main-btn:hover { 
-            transform: scale(1.02); 
-            background: linear-gradient(90deg, #0055dd, #0099ff); 
-            box-shadow: 0 0 25px rgba(0, 136, 255, 0.4);
-        }
-        
-        .main-btn:active { transform: scale(0.98); background: #fff; color: #000; }
-
-        .secondary { 
-            background: rgba(255,255,255,0.1); 
-            border: 1px solid rgba(255,255,255,0.2); 
-            color: #ccc; 
-            width: 48%; 
-            display: inline-block; 
-            font-size: 0.9rem;
-        }
-        .secondary:hover { background: rgba(255,255,255,0.2); color: white; }
-        
-        /* INPUTS */
-        input.code-input { 
-            background: rgba(0,0,0,0.6); 
-            border: 1px solid #444; 
-            border-bottom: 2px solid #0af;
-            padding: 15px; 
-            color: white; 
-            width: 100%; 
-            box-sizing: border-box; 
-            text-align: center; 
-            font-size: 1.5rem; 
-            letter-spacing: 5px; 
-            margin-bottom: 10px; 
-            text-transform: uppercase; 
-            outline: none; 
-            pointer-events: auto; 
-            font-family: 'Orbitron', monospace; 
-            transition: 0.3s;
-        }
-        input.code-input:focus { border-color: #fff; background: rgba(0,100,255,0.1); }
-        
-        /* LISTA DE SALAS */
-        #room-list { 
-            max-height: 200px; overflow-y: auto; margin-top: 15px; 
-            border-top: 1px solid rgba(255,255,255,0.1); 
-            width: 100%; text-align: left; 
-        }
-        .room-item { 
-            padding: 12px; 
-            border-bottom: 1px solid rgba(255,255,255,0.05); 
-            display: flex; justify-content: space-between; align-items: center; 
-            color: #aaa; font-size: 1rem; transition: 0.2s;
-        }
-        .room-item:hover { background: rgba(255,255,255,0.05); color: white; }
-        .room-item b { color: #0af; font-family: 'Orbitron'; }
-
-        /* LOADING */
-        #loading { 
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            background: #050510; z-index: 200; display: none; 
-            align-items: center; justify-content: center; flex-direction: column; 
-        }
-        .loader { 
-            width: 60px; height: 60px; 
-            border: 3px solid transparent; 
-            border-top-color: #0af; 
-            border-radius: 50%; 
-            animation: spin 1s linear infinite; 
-            margin-bottom: 20px;
-            box-shadow: 0 0 15px #0af;
-        }
-        .loader::before {
-            content:''; position: absolute; top: 5px; left: 5px; right: 5px; bottom: 5px;
-            border-radius: 50%; border: 3px solid transparent; border-top-color: #f0f;
-            animation: spin 3s linear infinite;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-        /* GAME HUD */
-        #hud-speed { position: absolute; bottom: 180px; right: 150px; text-align: right; font-family: 'Orbitron', sans-serif; text-shadow: 0 0 10px black; transform: skewX(-10deg); }
-        #hud-speed span { font-size: 70px; color: #ff3333; display: block; line-height: 0.8; font-weight: 900; text-shadow: 0 0 20px rgba(255,50,50,0.5); }
-        #hud-speed small { font-size: 16px; opacity: 0.8; letter-spacing: 2px; color: white; }
-
-        /* CONTROLES */
-        #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 140px; height: 140px; background: rgba(255,255,255,0.05); border-radius: 50%; border: 2px solid rgba(255,255,255,0.1); touch-action: none; pointer-events: auto; }
-        #joystick-knob { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255, 50, 50, 0.8); border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 15px rgba(255,0,0,0.5); pointer-events: none; }
-
-        .pedal { position: absolute; border-radius: 10px; border: 2px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; font-size: 30px; color: white; touch-action: none; cursor: pointer; transition: transform 0.1s; pointer-events: auto; backdrop-filter: blur(4px); }
-        .pedal:active { transform: scale(0.95); background: rgba(255,255,255,0.2); }
-        #gas-btn { bottom: 40px; right: 40px; width: 90px; height: 180px; background: linear-gradient(to top, #600, #f00); clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 100%); }
-        #brake-btn { bottom: 40px; right: 150px; width: 100px; height: 80px; background: linear-gradient(to top, #222, #555); clip-path: polygon(0 0, 100% 0, 80% 100%, 0 100%); }
-        
-        #ping { position: absolute; top: 10px; left: 10px; color: #0f0; font-family: monospace; font-size: 10px; text-shadow: 0 0 5px #0f0; }
-
-        /* MENÚ FLOTANTE */
-        #menu-btn {
-            position: absolute; top: 20px; right: 20px;
-            width: 50px; height: 50px;
-            background: rgba(0,0,0,0.6);
-            border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 8px;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 24px; cursor: pointer; pointer-events: auto;
-            backdrop-filter: blur(5px); z-index: 100;
-            transition: 0.3s;
-        }
-        #menu-btn:hover { background: rgba(0, 170, 255, 0.3); border-color: #0af; }
-
-        #menu-modal {
-            position: absolute; top: 80px; right: 20px;
-            background: rgba(10, 15, 20, 0.95);
-            border: 1px solid #333; border-left: 3px solid #0af;
-            padding: 20px; border-radius: 4px;
-            width: 250px; display: none; flex-direction: column; gap: 15px;
-            pointer-events: auto; z-index: 99;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.8);
-        }
-        
-        .menu-option { display: flex; justify-content: space-between; align-items: center; font-size: 14px; color: #ccc; }
-        .switch { position: relative; display: inline-block; width: 40px; height: 20px; }
+        input[type=range] { width: 100px; accent-color: #0af; height: 4px; background: #333; border-radius: 2px; }
+        .switch { position: relative; display: inline-block; width: 36px; height: 18px; }
         .switch input { opacity: 0; width: 0; height: 0; }
         .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .4s; border-radius: 20px; }
-        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        .slider:before { position: absolute; content: ""; height: 12px; width: 12px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
         input:checked + .slider { background-color: #0af; }
-        input:checked + .slider:before { transform: translateX(20px); }
+        input:checked + .slider:before { transform: translateX(18px); }
 
+        /* HUD */
+        #loading { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 200; display: none; align-items: center; justify-content: center; flex-direction: column; }
+        .loader { width: 50px; height: 50px; border: 3px solid transparent; border-top-color: #0af; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        #hud-speed { position: absolute; bottom: 180px; right: 40px; text-align: right; font-family: 'Orbitron'; transform: skewX(-10deg); }
+        #hud-speed span { font-size: 60px; color: #ff3333; display: block; line-height: 0.8; font-weight: 900; text-shadow: 0 0 15px rgba(255,0,0,0.5); }
+        
+        #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 140px; height: 140px; background: rgba(255,255,255,0.05); border-radius: 50%; border: 2px solid rgba(255,255,255,0.1); touch-action: none; pointer-events: auto; }
+        #joystick-knob { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255, 50, 50, 0.8); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; box-shadow: 0 0 10px red; }
+        .pedal { position: absolute; border-radius: 8px; border: 2px solid rgba(255,255,255,0.1); touch-action: none; pointer-events: auto; backdrop-filter: blur(4px); }
+        .pedal:active { transform: scale(0.95); opacity: 0.8; }
+        #gas-btn { bottom: 40px; right: 40px; width: 80px; height: 160px; background: linear-gradient(to top, #600, #f00); clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 100%); }
+        #brake-btn { bottom: 40px; right: 140px; width: 90px; height: 70px; background: linear-gradient(to top, #222, #555); clip-path: polygon(0 0, 100% 0, 80% 100%, 0 100%); }
+        
+        #fps { position: absolute; top: 10px; left: 10px; color: #0f0; font-family: monospace; font-size: 12px; display:none; }
+        #ping { position: absolute; top: 25px; left: 10px; color: #0f0; font-family: monospace; font-size: 12px; display:none; }
+        
+        .disabled-opt { opacity: 0.3; pointer-events: none; }
+        .admin-badge { background:#ff3333; color:white; font-size:9px; padding:2px 4px; border-radius:2px; margin-left:5px; }
     </style>
 </head>
 <body>
 
-<!-- LOGIN -->
 <div id="screen-login" class="screen">
     <div class="panel">
         <h1>PHOTONIK</h1>
-        <div class="subtitle">MULTIPLAYER RACING V20</div>
-        <button id="btn-connect" class="main-btn">INICIAR SISTEMA</button>
-        <div id="status" style="margin-top:15px; color: #666; font-size: 12px; font-family: monospace;">ESPERANDO CONEXIÓN...</div>
+        <div class="subtitle">ONLINE RACING V20</div>
+        <button id="btn-connect" class="main-btn">CONECTAR</button>
+        <div id="status" style="margin-top:15px; color: #666; font-size: 12px;">ESPERANDO SERVIDOR...</div>
     </div>
 </div>
 
-<!-- LOBBY -->
 <div id="screen-lobby" class="screen" style="display:none;">
     <div class="panel">
-        <h2 style="color:white; margin:0; font-family:'Orbitron'; letter-spacing:2px;">SALA DE ESPERA</h2>
-        <div style="height:1px; background:linear-gradient(90deg, transparent, #444, transparent); width:100%; margin: 20px 0;"></div>
-        
-        <button id="btn-create" class="main-btn" style="background: linear-gradient(90deg, #ff9900, #ff5500); box-shadow: 0 0 20px rgba(255,100,0,0.2);">CREAR CARRERA</button>
-        
-        <div style="display:flex; justify-content:space-between; margin-top:15px;">
-            <input id="inp-code" class="code-input" placeholder="CÓDIGO" maxlength="4" style="width: 50%;">
-            <button id="btn-join" class="main-btn secondary" style="width: 45%; margin:0;">UNIRSE</button>
+        <h2 style="color:white; margin:0; font-family:'Orbitron';">LOBBY</h2>
+        <div style="height:1px; background:#444; width:100%; margin: 20px 0;"></div>
+        <button id="btn-create" class="main-btn" style="background: linear-gradient(90deg, #f90, #f50);">CREAR SALA</button>
+        <div style="display:flex; gap:10px; margin-top:15px;">
+            <input id="inp-code" class="code-input" placeholder="CÓDIGO" maxlength="4">
+            <button id="btn-join" class="main-btn secondary" style="margin:0;">UNIRSE</button>
         </div>
-
-        <div style="text-align:left; margin-top:25px; color:#0af; font-size:11px; font-weight:bold; letter-spacing:1px;">CARRERAS EN CURSO:</div>
-        <div id="room-list"></div>
-        <button id="btn-refresh" class="main-btn secondary" style="width:100%; margin-top:15px; font-size:0.8rem; padding:10px;">↻ ACTUALIZAR LISTA</button>
+        <div id="room-list" style="margin-top:20px; max-height:150px; overflow-y:auto; text-align:left;"></div>
+        <button id="btn-refresh" class="main-btn secondary" style="width:100%; margin-top:15px; font-size:0.8rem;">↻ REFRESCAR</button>
     </div>
 </div>
 
-<!-- LOADING -->
-<div id="loading">
-    <div class="loader"></div>
-    <div style="color:#0af; letter-spacing:4px; font-weight:bold; font-size:1.2rem;">GENERANDO MUNDO...</div>
-</div>
+<div id="loading"><div class="loader"></div><div style="color:#0af; letter-spacing:3px;">SINCRONIZANDO FÍSICAS...</div></div>
 
-<!-- GAME UI -->
 <div id="game-ui">
+    <div id="fps">FPS: 60</div>
     <div id="ping">PING: 0ms</div>
-    
-    <!-- MENÚ -->
     <div id="menu-btn">⚙️</div>
+    
     <div id="menu-modal">
-        <div style="color:#0af; font-weight:bold; margin-bottom:10px; font-family:'Orbitron'">AJUSTES</div>
+        <div style="font-family:'Orbitron'; color:white; font-size:16px; margin-bottom:10px;">CONFIGURACIÓN</div>
+        
+        <div class="menu-header">HOST (SALA) <span id="admin-badge" class="admin-badge" style="display:none">ADMIN</span></div>
+        <div id="host-controls" class="disabled-opt">
+            <div class="menu-option">
+                <span>Vel. Máx</span>
+                <input type="range" id="opt-max-speed" min="200" max="800" value="500">
+                <span id="disp-max-speed" class="val-disp">500</span>
+            </div>
+            <div class="menu-option">
+                <span>Aceleración</span>
+                <input type="range" id="opt-accel" min="20" max="100" value="40">
+                <span id="disp-accel" class="val-disp">40</span>
+            </div>
+        </div>
+
+        <div class="menu-header">PILOTO (LOCAL)</div>
         <div class="menu-option">
-            <span>Calidad Gráfica</span>
-            <label class="switch"><input type="checkbox" checked><span class="slider"></span></label>
+            <span>Sensibilidad</span>
+            <input type="range" id="opt-sens" min="10" max="150" value="60">
+            <span id="disp-sens" class="val-disp">60%</span>
         </div>
         <div class="menu-option">
-            <span>Sonido Motor</span>
-            <label class="switch"><input type="checkbox"><span class="slider"></span></label>
+            <span>Rigidez Vel.</span>
+            <input type="range" id="opt-stiff" min="0" max="100" value="50">
+            <span id="disp-stiff" class="val-disp">50%</span>
         </div>
-        <button class="main-btn secondary" style="width:100%; margin-top:10px; font-size:0.8rem;" onclick="location.reload()">SALIR DE LA CARRERA</button>
+        
+        <div class="menu-header">HUD</div>
+        <div class="menu-option">
+            <span>Mostrar FPS</span>
+            <label class="switch"><input type="checkbox" id="chk-fps"><span class="slider"></span></label>
+        </div>
+        <div class="menu-option">
+            <span>Mostrar Ping</span>
+            <label class="switch"><input type="checkbox" id="chk-ping"><span class="slider"></span></label>
+        </div>
+        
+        <button class="main-btn secondary" style="width:100%; margin-top:20px; background:#331111; border-color:#552222;" onclick="location.reload()">SALIR</button>
     </div>
 
-    <div id="hud-speed">
-        <span id="speed-display">0</span><small> KM/H</small>
-    </div>
-    
+    <div id="hud-speed"><span id="speed-display">0</span><small> KM/H</small></div>
     <div id="joystick-zone"><div id="joystick-knob"></div></div>
     <div id="brake-btn" class="pedal"></div>
     <div id="gas-btn" class="pedal"></div>
 </div>
 
 <script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-        }
-    }
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
 </script>
-
 <script type="module" src="main.js"></script>
 </body>
 </html>
