@@ -5,13 +5,13 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 // ==========================================
-// CONFIGURACIÓN VISUAL (ESTILO ORIGINAL)
+// CONFIGURACIÓN VISUAL
 // ==========================================
 const CONFIG = {
     ROAD_WIDTH_HALF: 9.0,
     WALL_WIDTH: 1.2,
     WALL_HEIGHT: 1.5,
-    ROAD_Y_OFFSET: 0.2, // Elevación sobre el terreno base
+    ROAD_Y_OFFSET: 0.2, // Altura base de la carretera
     CHUNK_LENGTH: 100,
     VISIBLE_CHUNKS: 16
 };
@@ -125,21 +125,29 @@ let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = []; const smokeGroup = new THREE.Group();
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
-// MATERIALES
+// MATERIALES OPTIMIZADOS PARA VISIBILIDAD
 const matRoad = new THREE.MeshStandardMaterial({ 
     color: 0x111111, 
     roughness: 0.6, 
     metalness: 0.1, 
-    side: THREE.DoubleSide
+    side: THREE.DoubleSide,
+    // Truco: PolygonOffset empuja la carretera hacia atrás en el Z-buffer
+    // asegurando que las líneas pintadas encima SIEMPRE se vean.
+    polygonOffset: true,
+    polygonOffsetFactor: 1, 
+    polygonOffsetUnits: 1
 }); 
+
 const matWall = new THREE.MeshStandardMaterial({ 
     color: 0xcccccc, 
     roughness: 0.5, 
     metalness: 0.1, 
     side: THREE.DoubleSide 
 });
-const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffaa00 }); 
+
+const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffcc00 }); 
 const matLineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
 const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.4, metalness: 0.1, flatShading: true });
 const matPillar = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
 const matLeaves = new THREE.MeshStandardMaterial({color: 0x2e7d32});
@@ -203,7 +211,7 @@ function setupEnvironment() {
 }
 
 // ==========================================
-// GENERACIÓN PROCEDURAL (LÓGICA ORIGINAL)
+// GENERACIÓN PROCEDURAL (TERRAIN & ROAD)
 // ==========================================
 const noisePerm = new Uint8Array(512); const p = new Uint8Array(256);
 for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
@@ -219,6 +227,7 @@ class Chunk {
         this.index = idx;
         this.startDist = globalDist;
         this.group = new THREE.Group();
+        this.clouds = []; // Array para almacenar nubes de este chunk
         scene.add(this.group);
 
         const angleChange = (rng() - 0.5) * 0.5;
@@ -240,99 +249,98 @@ class Chunk {
         this.endDist = globalDist + this.length;
         this.endPoint = p3; this.endAngle = endAngle;
 
-        this.buildOriginalGeometry();
+        this.buildGeometry();
         this.buildTerrain();
         this.buildProps();
         this.buildClouds();
         this.buildAtmosphere();
     }
 
-    buildOriginalGeometry() {
+    buildGeometry() {
         const div = 40; 
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
         
-        const rV = [], rI = []; // Road
-        const wV = [], wI = []; // Walls
-        const lV = [], lI = []; // Lines White (Lateral)
-        const yV = [], yI = []; // Lines Yellow (Central - Dashed)
+        const rV = [], rI = []; 
+        const wV = [], wI = []; 
+        const lV = [], lI = []; 
+        const yV = [], yI = []; 
+
+        // Altura física de la línea (Elevada para evitar solape)
+        // La carretera está en Y_OFFSET. Las líneas en Y_OFFSET + 0.06
+        const lineYOffset = CONFIG.ROAD_Y_OFFSET + 0.06;
 
         for(let i=0; i<=div; i++) {
-            const p = pts[i]; const n = frames.binormals[i]; const up = frames.normals[i];
+            const p = pts[i]; const n = frames.binormals[i]; 
             
-            // 1. CARRETERA (2 vértices por paso: Izq, Der)
+            // 1. CARRETERA
             rV.push(
                 p.x + n.x * CONFIG.ROAD_WIDTH_HALF, p.y + CONFIG.ROAD_Y_OFFSET, p.z + n.z * CONFIG.ROAD_WIDTH_HALF,
                 p.x - n.x * CONFIG.ROAD_WIDTH_HALF, p.y + CONFIG.ROAD_Y_OFFSET, p.z - n.z * CONFIG.ROAD_WIDTH_HALF
             );
 
-            // 2. MUROS
-            const L_Inner = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
-            const L_Outer = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH));
+            // 2. MUROS LATERALES
             const yTop = p.y + CONFIG.ROAD_Y_OFFSET + CONFIG.WALL_HEIGHT;
             const yBot = p.y - 2.0;
+            // Left Wall Vertices
+            const L_In = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
+            const L_Out = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH));
+            wV.push(L_In.x, yTop, L_In.z, L_In.x, yBot, L_In.z, L_Out.x, yTop, L_Out.z, L_Out.x, yBot, L_Out.z);
+            // Right Wall Vertices
+            const R_In = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
+            const R_Out = p.clone().add(n.clone().multiplyScalar(-(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH)));
+            wV.push(R_In.x, yTop, R_In.z, R_In.x, yBot, R_In.z, R_Out.x, yTop, R_Out.z, R_Out.x, yBot, R_Out.z);
 
-            wV.push(L_Inner.x, yTop, L_Inner.z); // 0
-            wV.push(L_Inner.x, yBot, L_Inner.z); // 1
-            wV.push(L_Outer.x, yTop, L_Outer.z); // 2
-            wV.push(L_Outer.x, yBot, L_Outer.z); // 3
-
-            const R_Inner = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
-            const R_Outer = p.clone().add(n.clone().multiplyScalar(-(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH)));
-            
-            wV.push(R_Inner.x, yTop, R_Inner.z); // 4
-            wV.push(R_Inner.x, yBot, R_Inner.z); // 5
-            wV.push(R_Outer.x, yTop, R_Outer.z); // 6
-            wV.push(R_Outer.x, yBot, R_Outer.z); // 7
-
-            // 3. LÍNEAS BLANCAS LATERALES
-            const dist = CONFIG.ROAD_WIDTH_HALF - 0.8;
+            // 3. LÍNEAS BLANCAS LATERALES (Anchura 0.3)
+            const distL = CONFIG.ROAD_WIDTH_HALF - 0.8;
             const sw = 0.3;
-            const yLine = p.y + CONFIG.ROAD_Y_OFFSET + 0.03; // Ligeramente por encima del asfalto
+            // Left Line Verts
+            lV.push(p.x + n.x * distL, p.y + lineYOffset, p.z + n.z * distL); 
+            lV.push(p.x + n.x * (distL+sw), p.y + lineYOffset, p.z + n.z * (distL+sw));
+            // Right Line Verts
+            lV.push(p.x - n.x * distL, p.y + lineYOffset, p.z - n.z * distL);
+            lV.push(p.x - n.x * (distL+sw), p.y + lineYOffset, p.z - n.z * (distL+sw));
 
-            // Left Line (Inner & Outer edges)
-            lV.push(p.x + n.x * dist, yLine, p.z + n.z * dist); // 0: Inner Left
-            lV.push(p.x + n.x * (dist+sw), yLine, p.z + n.z * (dist+sw)); // 1: Outer Left
-            // Right Line (Inner & Outer edges)
-            lV.push(p.x - n.x * dist, yLine, p.z - n.z * dist); // 2: Inner Right
-            lV.push(p.x - n.x * (dist+sw), yLine, p.z - n.z * (dist+sw)); // 3: Outer Right
-
-            // 4. LÍNEA AMARILLA CENTRAL
+            // 4. LÍNEA AMARILLA CENTRAL (Anchura 0.15)
             const lw = 0.15;
-            yV.push(p.x + n.x * lw, yLine, p.z + n.z * lw); // 0: Left Edge
-            yV.push(p.x - n.x * lw, yLine, p.z - n.z * lw); // 1: Right Edge
+            yV.push(p.x + n.x * lw, p.y + lineYOffset, p.z + n.z * lw);
+            yV.push(p.x - n.x * lw, p.y + lineYOffset, p.z - n.z * lw);
         }
 
-        // CONSTRUCCIÓN DE ÍNDICES
         for(let i=0; i<div; i++) {
-            // -- CARRETERA --
-            const rBase = i * 2;
-            rI.push(rBase, rBase+2, rBase+1, rBase+1, rBase+2, rBase+3);
+            // Road Indices
+            const r = i * 2; rI.push(r, r+2, r+1, r+1, r+2, r+3);
 
-            // -- MUROS --
-            const wBase = i * 8;
-            wI.push(wBase+0, wBase+8, wBase+2, wBase+2, wBase+8, wBase+10);
-            wI.push(wBase+0, wBase+1, wBase+8, wBase+1, wBase+9, wBase+8);
-            wI.push(wBase+2, wBase+10, wBase+3, wBase+3, wBase+10, wBase+11);
-            wI.push(wBase+4, wBase+6, wBase+12, wBase+12, wBase+6, wBase+14);
-            wI.push(wBase+4, wBase+12, wBase+5, wBase+5, wBase+12, wBase+13);
-            wI.push(wBase+6, wBase+7, wBase+14, wBase+7, wBase+15, wBase+14);
+            // Wall Indices (4 quads per slice basically)
+            const w = i * 8; 
+            // Left Wall: In(0,1), Out(2,3) -> Next(8,9,10,11)
+            // Top: 0-8-2-10
+            wI.push(w+0, w+8, w+2, w+2, w+8, w+10);
+            // Inner: 0-1-8-9
+            wI.push(w+0, w+1, w+8, w+1, w+9, w+8);
+            // Outer: 2-10-3-11
+            wI.push(w+2, w+10, w+3, w+3, w+10, w+11);
+            
+            // Right Wall: In(4,5), Out(6,7) -> Next(12,13,14,15)
+            // Top
+            wI.push(w+4, w+6, w+12, w+12, w+6, w+14);
+            // Inner
+            wI.push(w+4, w+12, w+5, w+5, w+12, w+13);
+            // Outer
+            wI.push(w+6, w+7, w+14, w+7, w+15, w+14);
 
-            // -- LÍNEAS BLANCAS LATERALES --
-            const lBase = i * 4; // 4 vértices por segmento (2 izq, 2 der)
-            // Left line quad
-            lI.push(lBase, lBase+4, lBase+1, lBase+1, lBase+4, lBase+5);
-            // Right line quad
-            lI.push(lBase+2, lBase+6, lBase+3, lBase+3, lBase+6, lBase+7);
+            // Lines White
+            const l = i * 4;
+            lI.push(l, l+4, l+1, l+1, l+4, l+5);
+            lI.push(l+2, l+6, l+3, l+3, l+6, l+7);
 
-            // -- LÍNEA AMARILLA CENTRAL (Dashed) --
+            // Lines Yellow (Dashed)
             if (i % 2 === 0) {
-                const yBase = i * 2; // 2 vértices por segmento
-                yI.push(yBase, yBase+2, yBase+1, yBase+1, yBase+2, yBase+3);
+                const y = i * 2;
+                yI.push(y, y+2, y+1, y+1, y+2, y+3);
             }
         }
 
-        // CREAR MALLAS
         const rG = new THREE.BufferGeometry();
         rG.setAttribute('position', new THREE.Float32BufferAttribute(rV, 3));
         rG.setIndex(rI); rG.computeVertexNormals();
@@ -348,7 +356,6 @@ class Chunk {
         const lG = new THREE.BufferGeometry();
         lG.setAttribute('position', new THREE.Float32BufferAttribute(lV, 3));
         lG.setIndex(lI);
-        // No necesitan normales complejas al ser planas sobre asfalto
         this.group.add(new THREE.Mesh(lG, matLineWhite));
 
         if(yI.length > 0) {
@@ -425,7 +432,9 @@ class Chunk {
             }
             const p = this.curve.getPointAt(0.5);
             cloud.position.set(p.x + (rng()-0.5)*400, 50 + rng()*40, p.z + (rng()-0.5)*400);
+            
             this.group.add(cloud);
+            this.clouds.push(cloud); // Guardar referencia para animar
         }
     }
 
@@ -567,6 +576,16 @@ function animate() {
     if(state.inGame) {
         socket.emit('playerInput', state.input);
         
+        // MOVIMIENTO DE NUBES (HACIA EL SUR / +Z)
+        // Iteramos sobre todos los chunks activos y sus nubes
+        chunks.forEach(chunk => {
+            if(chunk.clouds) {
+                chunk.clouds.forEach(c => {
+                    c.position.z += 0.2; // Desplazamiento constante al Sur
+                });
+            }
+        });
+
         const time = Date.now() * 0.00005; 
         if(state.players[state.myId]) {
             const carPos = state.players[state.myId].mesh.position;
