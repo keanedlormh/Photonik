@@ -11,7 +11,7 @@ const CONFIG = {
     ROAD_WIDTH_HALF: 9.0,
     WALL_WIDTH: 1.2,
     WALL_HEIGHT: 1.5,
-    ROAD_Y_OFFSET: 0.2, // Altura base de la carretera
+    ROAD_Y_OFFSET: 0.2,
     CHUNK_LENGTH: 100,
     VISIBLE_CHUNKS: 16
 };
@@ -125,28 +125,18 @@ let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = []; const smokeGroup = new THREE.Group();
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
-// MATERIALES OPTIMIZADOS PARA VISIBILIDAD
+// MATERIALES
 const matRoad = new THREE.MeshStandardMaterial({ 
     color: 0x111111, 
     roughness: 0.6, 
     metalness: 0.1, 
-    side: THREE.DoubleSide,
-    // Truco: PolygonOffset empuja la carretera hacia atrás en el Z-buffer
-    // asegurando que las líneas pintadas encima SIEMPRE se vean.
-    polygonOffset: true,
-    polygonOffsetFactor: 1, 
-    polygonOffsetUnits: 1
+    side: THREE.DoubleSide
 }); 
+const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
 
-const matWall = new THREE.MeshStandardMaterial({ 
-    color: 0xcccccc, 
-    roughness: 0.5, 
-    metalness: 0.1, 
-    side: THREE.DoubleSide 
-});
-
-const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffcc00 }); 
-const matLineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff });
+// LÍNEAS: Usamos depthWrite:false para forzar que se pinten sobre el asfalto sin z-fighting
+const matLineYellow = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide }); 
+const matLineWhite = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 
 const matWater = new THREE.MeshStandardMaterial({ color: 0x2196f3, roughness: 0.4, metalness: 0.1, flatShading: true });
 const matPillar = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9 });
@@ -154,6 +144,9 @@ const matLeaves = new THREE.MeshStandardMaterial({color: 0x2e7d32});
 const matWood = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
 const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xdddddd, emissiveIntensity: 0.2, flatShading: true });
 const matAtmosphere = new THREE.PointsMaterial({ size: 0.4, color: 0xffffff, transparent: true, opacity: 0.3 });
+
+// MATERIALES COCHE
+const matTailLight = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Luz roja pura
 
 function initThreeJS() {
     scene = new THREE.Scene();
@@ -174,7 +167,7 @@ function initThreeJS() {
 
     const renderPass = new RenderPass(scene, camera);
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-    bloomPass.threshold = 0.8; bloomPass.strength = 0.2; bloomPass.radius = 0.3;
+    bloomPass.threshold = 0.8; bloomPass.strength = 0.25; bloomPass.radius = 0.3;
     
     composer = new EffectComposer(renderer);
     composer.addPass(renderPass);
@@ -211,7 +204,7 @@ function setupEnvironment() {
 }
 
 // ==========================================
-// GENERACIÓN PROCEDURAL (TERRAIN & ROAD)
+// GENERACIÓN PROCEDURAL
 // ==========================================
 const noisePerm = new Uint8Array(512); const p = new Uint8Array(256);
 for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
@@ -227,7 +220,7 @@ class Chunk {
         this.index = idx;
         this.startDist = globalDist;
         this.group = new THREE.Group();
-        this.clouds = []; // Array para almacenar nubes de este chunk
+        this.clouds = [];
         scene.add(this.group);
 
         const angleChange = (rng() - 0.5) * 0.5;
@@ -266,9 +259,8 @@ class Chunk {
         const lV = [], lI = []; 
         const yV = [], yI = []; 
 
-        // Altura física de la línea (Elevada para evitar solape)
-        // La carretera está en Y_OFFSET. Las líneas en Y_OFFSET + 0.06
-        const lineYOffset = CONFIG.ROAD_Y_OFFSET + 0.06;
+        // ELEVACIÓN SIGNIFICATIVA PARA LÍNEAS (Evita Z-Fighting)
+        const lineYOffset = CONFIG.ROAD_Y_OFFSET + 0.15; // +15cm sobre asfalto
 
         for(let i=0; i<=div; i++) {
             const p = pts[i]; const n = frames.binormals[i]; 
@@ -282,59 +274,41 @@ class Chunk {
             // 2. MUROS LATERALES
             const yTop = p.y + CONFIG.ROAD_Y_OFFSET + CONFIG.WALL_HEIGHT;
             const yBot = p.y - 2.0;
-            // Left Wall Vertices
             const L_In = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
             const L_Out = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH));
             wV.push(L_In.x, yTop, L_In.z, L_In.x, yBot, L_In.z, L_Out.x, yTop, L_Out.z, L_Out.x, yBot, L_Out.z);
-            // Right Wall Vertices
             const R_In = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
             const R_Out = p.clone().add(n.clone().multiplyScalar(-(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH)));
             wV.push(R_In.x, yTop, R_In.z, R_In.x, yBot, R_In.z, R_Out.x, yTop, R_Out.z, R_Out.x, yBot, R_Out.z);
 
-            // 3. LÍNEAS BLANCAS LATERALES (Anchura 0.3)
+            // 3. LÍNEAS LATERALES BLANCAS (Ancho 0.4)
             const distL = CONFIG.ROAD_WIDTH_HALF - 0.8;
-            const sw = 0.3;
-            // Left Line Verts
+            const sw = 0.4;
             lV.push(p.x + n.x * distL, p.y + lineYOffset, p.z + n.z * distL); 
             lV.push(p.x + n.x * (distL+sw), p.y + lineYOffset, p.z + n.z * (distL+sw));
-            // Right Line Verts
             lV.push(p.x - n.x * distL, p.y + lineYOffset, p.z - n.z * distL);
             lV.push(p.x - n.x * (distL+sw), p.y + lineYOffset, p.z - n.z * (distL+sw));
 
-            // 4. LÍNEA AMARILLA CENTRAL (Anchura 0.15)
-            const lw = 0.15;
+            // 4. LÍNEA CENTRAL AMARILLA (Ancho 0.2)
+            const lw = 0.2;
             yV.push(p.x + n.x * lw, p.y + lineYOffset, p.z + n.z * lw);
             yV.push(p.x - n.x * lw, p.y + lineYOffset, p.z - n.z * lw);
         }
 
         for(let i=0; i<div; i++) {
-            // Road Indices
             const r = i * 2; rI.push(r, r+2, r+1, r+1, r+2, r+3);
-
-            // Wall Indices (4 quads per slice basically)
             const w = i * 8; 
-            // Left Wall: In(0,1), Out(2,3) -> Next(8,9,10,11)
-            // Top: 0-8-2-10
             wI.push(w+0, w+8, w+2, w+2, w+8, w+10);
-            // Inner: 0-1-8-9
             wI.push(w+0, w+1, w+8, w+1, w+9, w+8);
-            // Outer: 2-10-3-11
             wI.push(w+2, w+10, w+3, w+3, w+10, w+11);
-            
-            // Right Wall: In(4,5), Out(6,7) -> Next(12,13,14,15)
-            // Top
             wI.push(w+4, w+6, w+12, w+12, w+6, w+14);
-            // Inner
             wI.push(w+4, w+12, w+5, w+5, w+12, w+13);
-            // Outer
             wI.push(w+6, w+7, w+14, w+7, w+15, w+14);
 
-            // Lines White
             const l = i * 4;
             lI.push(l, l+4, l+1, l+1, l+4, l+5);
             lI.push(l+2, l+6, l+3, l+3, l+6, l+7);
 
-            // Lines Yellow (Dashed)
             if (i % 2 === 0) {
                 const y = i * 2;
                 yI.push(y, y+2, y+1, y+1, y+2, y+3);
@@ -403,17 +377,28 @@ class Chunk {
                 this.group.add(pil);
             }
         }
-        for(let i=0; i<8; i++) {
+        // DOBLE DE ÁRBOLES (20 por chunk)
+        for(let i=0; i<20; i++) {
             const t = rng(); const side = rng() > 0.5 ? 1 : -1; const dist = CONFIG.ROAD_WIDTH_HALF + 15 + rng() * 60;
             const p = this.curve.getPointAt(t); const tan = this.curve.getTangentAt(t);
             const bin = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
             const pos = p.clone().add(bin.multiplyScalar(side * dist));
             const y = getTerrainHeight(pos.x, pos.z);
+            
+            // Solo plantar si es terreno sólido
             if(y > 0) {
                 const gr = new THREE.Group();
-                const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.8, 6, 5), matWood); tr.position.y = 3;
-                const lv = new THREE.Mesh(new THREE.ConeGeometry(3, 8, 5), matLeaves); lv.position.y = 8;
-                gr.add(tr, lv); gr.position.set(pos.x, y, pos.z); gr.scale.setScalar(0.8 + rng() * 0.5); gr.castShadow = true;
+                // Tronco más largo (Altura 10)
+                const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 10, 5), matWood); 
+                tr.position.y = 5; // Centro en 5 para que base esté en 0
+                const lv = new THREE.Mesh(new THREE.ConeGeometry(3.5, 9, 5), matLeaves); 
+                lv.position.y = 10;
+                
+                gr.add(tr, lv); 
+                // Hundir el árbol 2 metros bajo tierra para evitar que flote en pendientes
+                gr.position.set(pos.x, y - 2.0, pos.z); 
+                gr.scale.setScalar(0.8 + rng() * 0.5); 
+                gr.castShadow = true;
                 this.group.add(gr);
             }
         }
@@ -434,7 +419,7 @@ class Chunk {
             cloud.position.set(p.x + (rng()-0.5)*400, 50 + rng()*40, p.z + (rng()-0.5)*400);
             
             this.group.add(cloud);
-            this.clouds.push(cloud); // Guardar referencia para animar
+            this.clouds.push(cloud);
         }
     }
 
@@ -496,6 +481,21 @@ function createCar(colorStr) {
         const w = new THREE.Mesh(wGeo, matW); w.position.set(p[0], 0.4, p[1]); car.add(w);
         car.add(createOutline(wGeo, 1.05).translateX(p[0]).translateY(0.4).translateZ(p[1]));
     });
+
+    // LUCES TRASERAS (NUEVO)
+    const tlGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
+    const tlLeft = new THREE.Mesh(tlGeo, matTailLight);
+    tlLeft.position.set(0.6, 0.7, -2.15); // Atrás izquierda
+    car.add(tlLeft);
+    const tlRight = new THREE.Mesh(tlGeo, matTailLight);
+    tlRight.position.set(-0.6, 0.7, -2.15); // Atrás derecha
+    car.add(tlRight);
+
+    // Glow luces traseras
+    const tlGlow = new THREE.PointLight(0xff0000, 2, 5);
+    tlGlow.position.set(0, 0.7, -2.5);
+    car.add(tlGlow);
+
     return car;
 }
 
@@ -577,11 +577,10 @@ function animate() {
         socket.emit('playerInput', state.input);
         
         // MOVIMIENTO DE NUBES (HACIA EL SUR / +Z)
-        // Iteramos sobre todos los chunks activos y sus nubes
         chunks.forEach(chunk => {
             if(chunk.clouds) {
                 chunk.clouds.forEach(c => {
-                    c.position.z += 0.2; // Desplazamiento constante al Sur
+                    c.position.z += 0.2; 
                 });
             }
         });
