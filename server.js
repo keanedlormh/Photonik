@@ -13,10 +13,10 @@ const io = new Server(server, {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const rooms = {};
-const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 io.on('connection', (socket) => {
     
+    // Crear Sala
     socket.on('createRoom', () => {
         const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
         rooms[roomId] = {
@@ -24,33 +24,38 @@ io.on('connection', (socket) => {
             players: {},
             host: socket.id,
             config: { maxSpeed: 500, accel: 40 },
-            seed: Math.floor(Math.random() * 999999) + 1 
+            seed: Math.floor(Math.random() * 999999) + 1,
+            count: 0 // Contador para asignar letras A, B, C...
         };
+        const pInfo = joinPlayer(socket, roomId);
         socket.emit('roomCreated', { 
             roomId, 
             seed: rooms[roomId].seed,
             isHost: true,
-            config: rooms[roomId].config
+            config: rooms[roomId].config,
+            label: pInfo.label // Enviamos su nombre al creador
         });
-        joinPlayer(socket, roomId);
     });
 
+    // Unirse
     socket.on('joinRoom', (roomId) => {
         if(!roomId) return;
         roomId = roomId.toUpperCase();
         if (rooms[roomId]) {
+            const pInfo = joinPlayer(socket, roomId);
             socket.emit('roomJoined', { 
                 roomId, 
                 seed: rooms[roomId].seed,
                 isHost: false,
-                config: rooms[roomId].config
+                config: rooms[roomId].config,
+                label: pInfo.label // Enviamos su nombre al unirse
             });
-            joinPlayer(socket, roomId);
         } else {
             socket.emit('errorMsg', 'Sala no encontrada');
         }
     });
 
+    // Listado
     socket.on('getRooms', () => {
         const list = [];
         for (const rid in rooms) {
@@ -62,6 +67,7 @@ io.on('connection', (socket) => {
         socket.emit('roomList', list);
     });
 
+    // Configuración
     socket.on('updateRoomConfig', (newConfig) => {
         const rid = socket.data.room;
         if(rid && rooms[rid] && rooms[rid].host === socket.id) {
@@ -70,6 +76,7 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Estado del Cliente
     socket.on('myState', (state) => {
         const rid = socket.data.room;
         if (rid && rooms[rid] && rooms[rid].players[socket.id]) {
@@ -91,16 +98,21 @@ function joinPlayer(socket, roomId) {
     socket.join(roomId);
     
     // Asignar Letra (A, B, C...)
-    const currentCount = Object.keys(rooms[roomId].players).length;
-    const letter = ALPHABET[currentCount % ALPHABET.length];
-    
+    const index = rooms[roomId].count % 26;
+    const letter = String.fromCharCode(65 + index);
+    const label = `PLAYER ${letter}`;
+    rooms[roomId].count++;
+
     const hue = Math.floor(Math.random() * 360);
-    rooms[roomId].players[socket.id] = {
+    const pData = {
         id: socket.id,
-        alias: letter,
+        label: label,
         color: `hsl(${hue}, 100%, 50%)`,
-        state: { d: 0, l: 0, s: 0, h: 0 } 
+        state: { d: 0, l: 0, s: 0, h: 0 }
     };
+    
+    rooms[roomId].players[socket.id] = pData;
+    return pData;
 }
 
 // Bucle Broadcast
@@ -113,7 +125,7 @@ setInterval(() => {
             if(p.state) {
                 pack.push({
                     i: p.id,
-                    n: p.alias, // Nombre/Letra
+                    n: p.label, // Nombre (Player A)
                     d: p.state.d,
                     l: p.state.l,
                     s: p.state.s,
