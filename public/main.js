@@ -18,10 +18,12 @@ function log(msg, type='info') {
     }
 }
 window.onerror = function(msg, url, line) {
-    log(`ERROR FATAL: ${msg} (Línea ${line})`, 'error');
+    log(`ERROR: ${msg} (Line ${line})`, 'error');
     if(debugUI) debugUI.style.display = 'block';
     return false;
 };
+
+log("Cargando script principal...");
 
 // ==========================================
 // 1. CONFIG & STATE
@@ -40,7 +42,7 @@ const state = {
     inGame: false,
     myId: null,
     isHost: false,
-    myLabel: "YO",
+    myLabel: "PILOTO",
     players: {}, 
     manualSpeed: 0.0,
     worldHeading: 0.0,
@@ -56,8 +58,12 @@ const state = {
 };
 
 // ==========================================
-// 2. RNG
+// 2. RNG & NOISE (MOVIDO AL INICIO)
 // ==========================================
+// Definimos esto aquí para evitar errores de referencia
+const noisePerm = new Uint8Array(512); 
+const p = new Uint8Array(256);
+
 function mulberry32(a) {
     return function() {
       var t = a += 0x6D2B79F5;
@@ -66,12 +72,29 @@ function mulberry32(a) {
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     }
 }
+
 let rng = mulberry32(1); 
+
+function initNoise() {
+    for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
+    for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
+}
+
+// Inicialización de respaldo
+for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256);
+for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
+
 function setSeed(s) { 
     log(`Semilla establecida: ${s}`);
     rng = mulberry32(s); 
     initNoise();
 }
+
+const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+const lerpFn = (t, a, b) => a + t * (b - a);
+const grad = (hash, x, y, z) => { const h = hash & 15; const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z; return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v); };
+const noise = (x, y) => { const X = Math.floor(x) & 255, Y = Math.floor(y) & 255; x -= Math.floor(x); y -= Math.floor(y); const u = fade(x), v = fade(y); const A = noisePerm[X] + Y, B = noisePerm[X + 1] + Y; return lerpFn(v, lerpFn(u, grad(noisePerm[A], x, y, 0), grad(noisePerm[B], x - 1, y, 0)), lerpFn(u, grad(noisePerm[A + 1], x, y - 1, 0), grad(noisePerm[B + 1], x - 1, y - 1, 0))); };
+function getTerrainHeight(x, z) { return noise(x*0.012, z*0.012)*30 + noise(x*0.04, z*0.04)*6; }
 
 // ==========================================
 // 3. UI & NETWORK
@@ -90,6 +113,8 @@ const ui = {
     roomList: document.getElementById('room-list'),
     brakeBtn: document.getElementById('brake-btn'),
     leaderboard: document.getElementById('leaderboard'),
+    
+    // Config Inputs
     optMaxSpeed: document.getElementById('opt-max-speed'), dispMaxSpeed: document.getElementById('disp-max-speed'),
     optAccel: document.getElementById('opt-accel'), dispAccel: document.getElementById('disp-accel'),
     optSens: document.getElementById('opt-sens'), dispSens: document.getElementById('disp-sens'),
@@ -97,6 +122,8 @@ const ui = {
     optCamDist: document.getElementById('opt-cam-dist'), dispCamDist: document.getElementById('disp-cam-dist'),
     hostControls: document.getElementById('host-controls'),
     adminBadge: document.getElementById('admin-badge'),
+    
+    // Checks
     chkDebug: document.getElementById('chk-debug'),
     chkInvert: document.getElementById('chk-invert'),
     chkShowBrake: document.getElementById('chk-show-brake'),
@@ -162,13 +189,17 @@ function setupSocket() {
 
 function startGame(data) {
     try {
-        state.seed = data.seed;
-        state.isHost = data.isHost;
-        state.myLabel = data.label;
-        state.settings.maxSpeed = data.config.maxSpeed;
-        state.settings.accel = data.config.accel;
-        ui.optMaxSpeed.value = data.config.maxSpeed; ui.dispMaxSpeed.innerText = data.config.maxSpeed;
-        ui.optAccel.value = data.config.accel; ui.dispAccel.innerText = data.config.accel;
+        state.seed = data.seed || 1234;
+        state.isHost = !!data.isHost;
+        state.myLabel = data.label || "PILOTO";
+        
+        // Safeguard config
+        const cfg = data.config || { maxSpeed: 500, accel: 40 };
+        state.settings.maxSpeed = cfg.maxSpeed;
+        state.settings.accel = cfg.accel;
+        
+        ui.optMaxSpeed.value = state.settings.maxSpeed; ui.dispMaxSpeed.innerText = state.settings.maxSpeed;
+        ui.optAccel.value = state.settings.accel; ui.dispAccel.innerText = state.settings.accel;
 
         if(state.isHost) { ui.hostControls.classList.remove('disabled-opt'); ui.adminBadge.style.display = 'inline-block'; } 
         else { ui.hostControls.classList.add('disabled-opt'); ui.adminBadge.style.display = 'none'; }
@@ -177,6 +208,7 @@ function startGame(data) {
         ui.lobby.style.display = 'none'; ui.loading.style.display = 'flex';
         
         log("Cargando Motor 3D...");
+        // Pequeño timeout para asegurar que el DOM refresca
         setTimeout(() => { 
             initThreeJS(); 
             ui.loading.style.display = 'none'; 
@@ -184,7 +216,7 @@ function startGame(data) {
             state.inGame = true; 
             log("Juego Iniciado.");
             animate(); 
-        }, 1000);
+        }, 500);
     } catch(e) {
         log("Error en startGame: " + e.message, 'error');
     }
@@ -198,6 +230,7 @@ let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = [];
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
+// Materiales
 const matRoad = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }); 
 const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
 const matLineY = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide, depthWrite: false });
@@ -234,7 +267,7 @@ function initThreeJS() {
         const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5); hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20); mainCar.add(hl); mainCar.add(hl.target);
 
         chunks = []; state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
-        log("Generando mundo...");
+        log("Generando chunks...");
         for(let i=0; i<CONFIG.VISIBLE_CHUNKS; i++) spawnChunk();
         const startData = getTrackData(0); if(startData) state.worldHeading = Math.atan2(startData.tan.x, startData.tan.z);
     } catch(e) {
@@ -263,25 +296,6 @@ function setupEnvironment() {
     sGeo.setAttribute('position', new THREE.Float32BufferAttribute(sPos, 3));
     starField = new THREE.Points(sGeo, new THREE.PointsMaterial({color: 0xffffff, size: 1.5, transparent: true, opacity: 0})); scene.add(starField);
 }
-
-// ==========================================
-// 5. GENERACIÓN PROCEDURAL
-// ==========================================
-const noisePerm = new Uint8Array(512); 
-const p = new Uint8Array(256);
-
-function initNoise() {
-    for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
-    for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
-}
-for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256);
-for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
-
-const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
-const lerpFn = (t, a, b) => a + t * (b - a);
-const grad = (hash, x, y, z) => { const h = hash & 15; const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z; return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v); };
-const noise = (x, y) => { const X = Math.floor(x) & 255, Y = Math.floor(y) & 255; x -= Math.floor(x); y -= Math.floor(y); const u = fade(x), v = fade(y); const A = noisePerm[X] + Y, B = noisePerm[X + 1] + Y; return lerpFn(v, lerpFn(u, grad(noisePerm[A], x, y, 0), grad(noisePerm[B], x - 1, y, 0)), lerpFn(u, grad(noisePerm[A + 1], x, y - 1, 0), grad(noisePerm[B + 1], x - 1, y - 1, 0))); };
-function getTerrainHeight(x, z) { return noise(x*0.012, z*0.012)*30 + noise(x*0.04, z*0.04)*6; }
 
 class Chunk {
     constructor(idx, startP, startA, globalDist) {
@@ -450,7 +464,7 @@ class Chunk {
         pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
         const parts = new THREE.Points(pGeo, matAtmosphere);
         this.group.add(parts);
-        this.atmosphere = parts; // Guardar referencia
+        this.atmosphere = parts;
     }
 
     dispose() { scene.remove(this.group); this.group.traverse(o => { if(o.geometry) o.geometry.dispose(); }); }
@@ -473,7 +487,11 @@ function createOutline(geo, scale) { const m = new THREE.Mesh(geo, matOutline); 
 
 function createCar(colorStr) {
     const car = new THREE.Group();
-    const matBody = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorStr), roughness: 0.2, metalness: 0.6 });
+    // Fallback si colorStr falla
+    let col = 0xffffff;
+    try { col = new THREE.Color(colorStr); } catch(e) {}
+    
+    const matBody = new THREE.MeshStandardMaterial({ color: col, roughness: 0.2, metalness: 0.6 });
     const bGeo = new THREE.BoxGeometry(2.0, 0.7, 4.2);
     const body = new THREE.Mesh(bGeo, matBody); body.position.y = 0.6; body.castShadow = true; car.add(body);
     car.add(createOutline(bGeo, 1.03).translateY(0.6));
@@ -497,6 +515,27 @@ function createCar(colorStr) {
     return car;
 }
 
+function spawnChunk() {
+    const idx = chunks.length > 0 ? chunks[chunks.length-1].index + 1 : 0;
+    const c = new Chunk(idx, state.worldGenState.point, state.worldGenState.angle, state.worldGenState.dist);
+    chunks.push(c);
+    state.worldGenState.point = c.endPoint; state.worldGenState.angle = c.endAngle; state.worldGenState.dist += c.length;
+}
+
+function getTrackData(dist) {
+    for(let c of chunks) {
+        if(dist >= c.startDist && dist < c.endDist) {
+            const t = (dist - c.startDist) / c.length;
+            const pos = c.curve.getPointAt(t);
+            const tan = c.curve.getTangentAt(t).normalize();
+            const up = new THREE.Vector3(0,1,0);
+            const right = new THREE.Vector3().crossVectors(tan, up).normalize();
+            return { pos, tan, right };
+        }
+    }
+    return null;
+}
+
 // ==========================================
 // 7. BUCLE PRINCIPAL
 // ==========================================
@@ -513,6 +552,7 @@ function animate() {
     frames++; if(now - lastFpsTime >= 1000) { ui.fps.innerText = "FPS: " + frames; frames=0; lastFpsTime=now; }
 
     if(state.inGame) {
+        // FÍSICAS LOCALES
         const maxSpeed = state.settings.maxSpeed / 100.0; const accel = (state.settings.accel / 100.0) * dt * 2.0;
         if(state.input.gas) { if(state.manualSpeed < maxSpeed) state.manualSpeed += accel; } 
         else if(state.input.brake) { state.manualSpeed -= accel * 2.5; } else { state.manualSpeed *= 0.99; }
@@ -534,21 +574,17 @@ function animate() {
             }
         }
 
-        // --- SISTEMA DE COLISIONES (NUEVO) ---
-        // Se ejecuta en cliente para respuesta inmediata
+        // COLISIONES ENTRE COCHES (CLIENTE)
         for (const pid in state.players) {
             const p = state.players[pid];
             if (p.lastData) { // Usamos último dato recibido
                 const dDist = state.trackDist - p.lastData.d;
                 const dLat = state.lateralOffset - p.lastData.l;
-                
-                // Caja colisión: 4.5m largo, 2.2m ancho
                 if (Math.abs(dDist) < 4.5 && Math.abs(dLat) < 2.2) {
-                    // Impacto!
-                    const pushDir = dLat > 0 ? 1 : -1; // Hacia donde me empujan
-                    state.lateralOffset += pushDir * 0.2; // Rebote lateral
-                    state.manualSpeed *= 0.9; // Pérdida velocidad
-                    camera.position.y += 0.5; // Shake effect
+                    const pushDir = dLat > 0 ? 1 : -1;
+                    state.lateralOffset += pushDir * 0.2; 
+                    state.manualSpeed *= 0.9; 
+                    camera.position.y += 0.5;
                 }
             }
         }
@@ -577,21 +613,12 @@ function animate() {
         const tEnv = now * 0.00005; const carPos = mainCar.position;
         sunLight.position.set(carPos.x + Math.cos(tEnv)*1500, Math.sin(tEnv)*1500, carPos.z); sunLight.target.position.copy(carPos);
         moonLight.position.set(carPos.x - Math.cos(tEnv)*1500, -Math.sin(tEnv)*1500, carPos.z);
-        
-        // --- MOVER NUBES Y ATMÓSFERA ---
         chunks.forEach(c => {
-            // Nubes
             c.clouds.forEach(cl => cl.position.z += 0.2);
-            // Atmósfera
             if(c.atmosphere) {
-                const posAttr = c.atmosphere.geometry.attributes.position;
-                const arr = posAttr.array;
-                // Movemos partículas lentamente en Z
-                for(let i=2; i<arr.length; i+=3) {
-                    arr[i] += 0.05; // Movimiento lento +Z (Sur)
-                    // Reset simple si se van muy lejos (opcional, aquí solo drift)
-                }
-                posAttr.needsUpdate = true;
+                const arr = c.atmosphere.geometry.attributes.position.array;
+                for(let i=2; i<arr.length; i+=3) { arr[i] += 0.05; if(arr[i] > carPos.z + 200) arr[i] -= 400; }
+                c.atmosphere.geometry.attributes.position.needsUpdate = true;
             }
         });
         
@@ -608,13 +635,11 @@ function updateRemotePlayers(data) {
     const racers = [{ label: state.myLabel, dist: state.trackDist, isMe: true }];
     data.forEach(p => {
         if(p.i === state.myId) return;
-        racers.push({ label: p.n, dist: p.d, isMe: false });
+        racers.push({ label: p.n || "RIVAL", dist: p.d, isMe: false });
         if(!state.players[p.i]) { const mesh = createCar(p.c); scene.add(mesh); state.players[p.i] = { mesh: mesh }; }
         const other = state.players[p.i];
+        other.lastData = p; // Guardar para colisiones
         
-        // GUARDAMOS DATOS PARA COLISIÓN
-        other.lastData = p; 
-
         const tData = getTrackData(p.d);
         if(tData) {
             const pos = tData.pos.clone().add(tData.right.multiplyScalar(p.l)); pos.y += CONFIG.ROAD_Y_OFFSET + 0.05;
