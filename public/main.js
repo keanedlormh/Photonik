@@ -4,7 +4,9 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
-// ... (Bloque de diagnóstico y configuración igual) ...
+// ==========================================
+// 0. DEBUG & LOGGING
+// ==========================================
 const debugUI = document.getElementById('debug-console');
 function log(msg, type='info') {
     console.log(`[GAME] ${msg}`);
@@ -21,6 +23,9 @@ window.onerror = function(msg, url, line) {
     return false;
 };
 
+// ==========================================
+// 1. CONFIG & STATE
+// ==========================================
 const CONFIG = {
     ROAD_WIDTH_HALF: 9.0,
     WALL_WIDTH: 1.2,
@@ -36,7 +41,6 @@ const state = {
     myId: null,
     isHost: false,
     myLabel: "YO",
-    myColor: null, // Guardamos color asignado
     players: {}, 
     manualSpeed: 0.0,
     worldHeading: 0.0,
@@ -51,7 +55,9 @@ const state = {
     worldGenState: { point: new THREE.Vector3(0, 4, 0), angle: 0, dist: 0 }
 };
 
-// RNG
+// ==========================================
+// 2. RNG
+// ==========================================
 function mulberry32(a) {
     return function() {
       var t = a += 0x6D2B79F5;
@@ -67,7 +73,9 @@ function setSeed(s) {
     initNoise();
 }
 
-// ... (Código de UI y Sockets igual, hasta startGame) ...
+// ==========================================
+// 3. UI & NETWORK
+// ==========================================
 let socket;
 const ui = {
     login: document.getElementById('screen-login'),
@@ -82,16 +90,13 @@ const ui = {
     roomList: document.getElementById('room-list'),
     brakeBtn: document.getElementById('brake-btn'),
     leaderboard: document.getElementById('leaderboard'),
-    
     optMaxSpeed: document.getElementById('opt-max-speed'), dispMaxSpeed: document.getElementById('disp-max-speed'),
     optAccel: document.getElementById('opt-accel'), dispAccel: document.getElementById('disp-accel'),
     optSens: document.getElementById('opt-sens'), dispSens: document.getElementById('disp-sens'),
     optStiff: document.getElementById('opt-stiff'), dispStiff: document.getElementById('disp-stiff'),
     optCamDist: document.getElementById('opt-cam-dist'), dispCamDist: document.getElementById('disp-cam-dist'),
-    
     hostControls: document.getElementById('host-controls'),
     adminBadge: document.getElementById('admin-badge'),
-    
     chkDebug: document.getElementById('chk-debug'),
     chkInvert: document.getElementById('chk-invert'),
     chkShowBrake: document.getElementById('chk-show-brake'),
@@ -160,8 +165,6 @@ function startGame(data) {
         state.seed = data.seed;
         state.isHost = data.isHost;
         state.myLabel = data.label;
-        state.myColor = data.color; // <--- GUARDAMOS EL COLOR DEL SERVIDOR
-        
         state.settings.maxSpeed = data.config.maxSpeed;
         state.settings.accel = data.config.accel;
         ui.optMaxSpeed.value = data.config.maxSpeed; ui.dispMaxSpeed.innerText = data.config.maxSpeed;
@@ -187,14 +190,14 @@ function startGame(data) {
     }
 }
 
-// ... (Mismo código de initThreeJS, pero usando state.myColor) ...
-
+// ==========================================
+// 4. MOTOR 3D
+// ==========================================
 let scene, camera, renderer, composer, chunks=[], smokeGroup, mainCar;
 let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = [];
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
-// MATERIALES
 const matRoad = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }); 
 const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
 const matLineY = new THREE.MeshBasicMaterial({ color: 0xffcc00, side: THREE.DoubleSide, depthWrite: false });
@@ -226,9 +229,8 @@ function initThreeJS() {
         setupEnvironment();
         smokeGroup = new THREE.Group(); scene.add(smokeGroup);
         
-        // USAMOS EL COLOR DEL SERVIDOR
-        mainCar = createCar(state.myColor || '#ffffff'); 
-        scene.add(mainCar);
+        const hue = Math.floor(Math.random()*360);
+        mainCar = createCar(`hsl(${hue}, 100%, 50%)`); scene.add(mainCar);
         const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5); hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20); mainCar.add(hl); mainCar.add(hl.target);
 
         chunks = []; state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
@@ -241,11 +243,29 @@ function initThreeJS() {
     }
 }
 
-// ... Resto de funciones (updateCarVisibility, setupEnvironment, initNoise, Chunk, etc.) IDÉNTICAS al paso anterior ...
-// (Incluirlas todas para funcionamiento completo)
+function updateCarVisibility() {
+    if(!mainCar) return;
+    const visible = !state.settings.fpv;
+    mainCar.children.forEach(child => { if(child.isMesh) child.visible = visible; });
+}
+
+function setupEnvironment() {
+    ambientLight = new THREE.AmbientLight(0x404040, 1.5); scene.add(ambientLight);
+    sunLight = new THREE.DirectionalLight(0xffdf80, 2.5); sunLight.castShadow = true; 
+    sunLight.shadow.mapSize.set(2048, 2048); sunLight.shadow.camera.far = 1000;
+    sunLight.shadow.camera.left = -500; sunLight.shadow.camera.right = 500;
+    sunLight.shadow.camera.top = 500; sunLight.shadow.camera.bottom = -500;
+    scene.add(sunLight);
+    sunMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00, fog: false })); scene.add(sunMesh);
+    moonLight = new THREE.DirectionalLight(0x88ccff, 3.0); scene.add(moonLight);
+    moonMesh = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false })); scene.add(moonMesh);
+    const sGeo = new THREE.BufferGeometry(); const sPos = []; for(let i=0; i<3000; i++) sPos.push((rng()-0.5)*2000, (rng()-0.5)*1000+500, (rng()-0.5)*2000);
+    sGeo.setAttribute('position', new THREE.Float32BufferAttribute(sPos, 3));
+    starField = new THREE.Points(sGeo, new THREE.PointsMaterial({color: 0xffffff, size: 1.5, transparent: true, opacity: 0})); scene.add(starField);
+}
 
 // ==========================================
-// 5. GENERACIÓN PROCEDURAL (NOISE & CHUNKS)
+// 5. GENERACIÓN PROCEDURAL
 // ==========================================
 const noisePerm = new Uint8Array(512); 
 const p = new Uint8Array(256);
@@ -254,7 +274,6 @@ function initNoise() {
     for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
     for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 }
-// Init fallback
 for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256);
 for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 
@@ -431,7 +450,7 @@ class Chunk {
         pGeo.setAttribute('position', new THREE.Float32BufferAttribute(pPos, 3));
         const parts = new THREE.Points(pGeo, matAtmosphere);
         this.group.add(parts);
-        this.atmosphere = parts;
+        this.atmosphere = parts; // Guardar referencia
     }
 
     dispose() { scene.remove(this.group); this.group.traverse(o => { if(o.geometry) o.geometry.dispose(); }); }
@@ -478,29 +497,8 @@ function createCar(colorStr) {
     return car;
 }
 
-function spawnChunk() {
-    const idx = chunks.length > 0 ? chunks[chunks.length-1].index + 1 : 0;
-    const c = new Chunk(idx, state.worldGenState.point, state.worldGenState.angle, state.worldGenState.dist);
-    chunks.push(c);
-    state.worldGenState.point = c.endPoint; state.worldGenState.angle = c.endAngle; state.worldGenState.dist += c.length;
-}
-
-function getTrackData(dist) {
-    for(let c of chunks) {
-        if(dist >= c.startDist && dist < c.endDist) {
-            const t = (dist - c.startDist) / c.length;
-            const pos = c.curve.getPointAt(t);
-            const tan = c.curve.getTangentAt(t).normalize();
-            const up = new THREE.Vector3(0,1,0);
-            const right = new THREE.Vector3().crossVectors(tan, up).normalize();
-            return { pos, tan, right };
-        }
-    }
-    return null;
-}
-
 // ==========================================
-// 6. BUCLE PRINCIPAL
+// 7. BUCLE PRINCIPAL
 // ==========================================
 let lastTime = performance.now();
 let frames = 0, lastFpsTime = 0;
@@ -515,7 +513,6 @@ function animate() {
     frames++; if(now - lastFpsTime >= 1000) { ui.fps.innerText = "FPS: " + frames; frames=0; lastFpsTime=now; }
 
     if(state.inGame) {
-        // FÍSICAS LOCALES
         const maxSpeed = state.settings.maxSpeed / 100.0; const accel = (state.settings.accel / 100.0) * dt * 2.0;
         if(state.input.gas) { if(state.manualSpeed < maxSpeed) state.manualSpeed += accel; } 
         else if(state.input.brake) { state.manualSpeed -= accel * 2.5; } else { state.manualSpeed *= 0.99; }
@@ -534,6 +531,25 @@ function animate() {
                 const roadAngle = Math.atan2(curData.tan.x, curData.tan.z);
                 let rel = state.worldHeading - roadAngle; while(rel > Math.PI) rel -= Math.PI*2; while(rel < -Math.PI) rel += Math.PI*2;
                 state.lateralOffset = Math.sign(state.lateralOffset) * CONFIG.WALL_LIMIT; state.worldHeading = roadAngle + (-rel * 0.5); state.manualSpeed *= 0.6;
+            }
+        }
+
+        // --- SISTEMA DE COLISIONES (NUEVO) ---
+        // Se ejecuta en cliente para respuesta inmediata
+        for (const pid in state.players) {
+            const p = state.players[pid];
+            if (p.lastData) { // Usamos último dato recibido
+                const dDist = state.trackDist - p.lastData.d;
+                const dLat = state.lateralOffset - p.lastData.l;
+                
+                // Caja colisión: 4.5m largo, 2.2m ancho
+                if (Math.abs(dDist) < 4.5 && Math.abs(dLat) < 2.2) {
+                    // Impacto!
+                    const pushDir = dLat > 0 ? 1 : -1; // Hacia donde me empujan
+                    state.lateralOffset += pushDir * 0.2; // Rebote lateral
+                    state.manualSpeed *= 0.9; // Pérdida velocidad
+                    camera.position.y += 0.5; // Shake effect
+                }
             }
         }
 
@@ -562,15 +578,20 @@ function animate() {
         sunLight.position.set(carPos.x + Math.cos(tEnv)*1500, Math.sin(tEnv)*1500, carPos.z); sunLight.target.position.copy(carPos);
         moonLight.position.set(carPos.x - Math.cos(tEnv)*1500, -Math.sin(tEnv)*1500, carPos.z);
         
+        // --- MOVER NUBES Y ATMÓSFERA ---
         chunks.forEach(c => {
+            // Nubes
             c.clouds.forEach(cl => cl.position.z += 0.2);
+            // Atmósfera
             if(c.atmosphere) {
-                const arr = c.atmosphere.geometry.attributes.position.array;
+                const posAttr = c.atmosphere.geometry.attributes.position;
+                const arr = posAttr.array;
+                // Movemos partículas lentamente en Z
                 for(let i=2; i<arr.length; i+=3) {
-                    arr[i] += 0.05; 
-                    if(arr[i] > c.endPoint.z + 100) arr[i] -= 200; // Loop simple
+                    arr[i] += 0.05; // Movimiento lento +Z (Sur)
+                    // Reset simple si se van muy lejos (opcional, aquí solo drift)
                 }
-                c.atmosphere.geometry.attributes.position.needsUpdate = true;
+                posAttr.needsUpdate = true;
             }
         });
         
@@ -590,6 +611,10 @@ function updateRemotePlayers(data) {
         racers.push({ label: p.n, dist: p.d, isMe: false });
         if(!state.players[p.i]) { const mesh = createCar(p.c); scene.add(mesh); state.players[p.i] = { mesh: mesh }; }
         const other = state.players[p.i];
+        
+        // GUARDAMOS DATOS PARA COLISIÓN
+        other.lastData = p; 
+
         const tData = getTrackData(p.d);
         if(tData) {
             const pos = tData.pos.clone().add(tData.right.multiplyScalar(p.l)); pos.y += CONFIG.ROAD_Y_OFFSET + 0.05;
