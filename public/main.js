@@ -18,15 +18,14 @@ function log(msg, type='info') {
     }
 }
 
-// Captura global de errores
 window.onerror = function(msg, url, line) {
     log(`ERROR FATAL: ${msg} (Línea ${line})`, 'error');
-    if(debugUI) debugUI.style.display = 'block'; // Abrir consola automáticamente
+    if(debugUI) debugUI.style.display = 'block';
     return false;
 };
 
 // ==========================================
-// 1. CONFIGURACIÓN
+// 1. CONFIGURACIÓN Y ESTADO
 // ==========================================
 const CONFIG = {
     ROAD_WIDTH_HALF: 9.0,
@@ -58,7 +57,29 @@ const state = {
 };
 
 // ==========================================
-// 2. UI & NETWORK
+// 2. RNG (Corrección Aquí)
+// ==========================================
+function mulberry32(a) {
+    return function() {
+      var t = a += 0x6D2B79F5;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    }
+}
+
+// DECLARACIÓN GLOBAL DE RNG (Faltaba esto)
+let rng = mulberry32(1); 
+
+function setSeed(s) { 
+    log(`Semilla establecida: ${s}`);
+    rng = mulberry32(s); 
+    // Regenerar ruido para que el terreno coincida
+    initNoise();
+}
+
+// ==========================================
+// 3. UI & NETWORK
 // ==========================================
 let socket;
 const ui = {
@@ -75,7 +96,6 @@ const ui = {
     brakeBtn: document.getElementById('brake-btn'),
     leaderboard: document.getElementById('leaderboard'),
     
-    // Options
     optMaxSpeed: document.getElementById('opt-max-speed'), dispMaxSpeed: document.getElementById('disp-max-speed'),
     optAccel: document.getElementById('opt-accel'), dispAccel: document.getElementById('disp-accel'),
     optSens: document.getElementById('opt-sens'), dispSens: document.getElementById('disp-sens'),
@@ -85,7 +105,6 @@ const ui = {
     hostControls: document.getElementById('host-controls'),
     adminBadge: document.getElementById('admin-badge'),
     
-    // Checks
     chkDebug: document.getElementById('chk-debug'),
     chkInvert: document.getElementById('chk-invert'),
     chkShowBrake: document.getElementById('chk-show-brake'),
@@ -95,7 +114,6 @@ const ui = {
     chkLb: document.getElementById('chk-lb')
 };
 
-// Listeners Menú
 ui.menuBtn.onclick = () => ui.menuModal.style.display = (ui.menuModal.style.display==='flex'?'none':'flex');
 ui.chkDebug.onchange = (e) => debugUI.style.display = e.target.checked ? 'block' : 'none';
 
@@ -115,43 +133,36 @@ ui.chkPing.onchange = (e) => ui.ping.style.display = e.target.checked ? 'block' 
 ui.chkLb.onchange = (e) => ui.leaderboard.style.display = e.target.checked ? 'flex' : 'none';
 
 document.getElementById('btn-connect').onclick = () => {
-    log("Iniciando conexión Socket.IO...");
+    log("Iniciando conexión...");
     document.getElementById('status').innerText = "CONECTANDO...";
     document.getElementById('status').style.color = "#0af";
     socket = io(); setupSocket();
 };
-document.getElementById('btn-create').onclick = () => { log("Solicitando crear sala..."); socket.emit('createRoom'); };
+document.getElementById('btn-create').onclick = () => { log("Creando sala..."); socket.emit('createRoom'); };
 document.getElementById('btn-refresh').onclick = () => socket.emit('getRooms');
 document.getElementById('btn-join').onclick = () => { const c = document.getElementById('inp-code').value; if(c) socket.emit('joinRoom', c); };
-window.joinRoomId = (id) => { log(`Uniendo a sala ${id}...`); socket.emit('joinRoom', id); };
+window.joinRoomId = (id) => { log(`Uniéndose a ${id}...`); socket.emit('joinRoom', id); };
 
 function setupSocket() {
     socket.on('connect', () => { 
-        log("Conectado al servidor. ID: " + socket.id);
-        state.myId = socket.id; 
-        ui.login.style.display = 'none'; 
-        ui.lobby.style.display = 'flex'; 
-        socket.emit('getRooms'); 
+        log("Conectado. ID: " + socket.id);
+        state.myId = socket.id; ui.login.style.display = 'none'; ui.lobby.style.display = 'flex'; socket.emit('getRooms'); 
     });
     socket.on('disconnect', () => log("Desconectado del servidor.", 'error'));
-    
     socket.on('roomList', (list) => {
         ui.roomList.innerHTML = '';
         if(list.length===0) ui.roomList.innerHTML = '<div style="padding:10px;color:#666">NO HAY SALAS</div>';
         list.forEach(r => { ui.roomList.innerHTML += `<div class="room-item"><span>${r.id} (${r.players}/8)</span><button class="main-btn secondary" onclick="window.joinRoomId('${r.id}')" style="width:auto;padding:5px;font-size:0.7rem;margin:0;">ENTRAR</button></div>`; });
     });
-    
-    socket.on('roomCreated', d => { log("Sala creada. Iniciando juego..."); startGame(d); });
-    socket.on('roomJoined', d => { log("Unido a sala. Iniciando juego..."); startGame(d); });
-    socket.on('errorMsg', msg => log("Error Servidor: " + msg, 'error'));
-    
+    socket.on('roomCreated', d => { log("Sala creada OK."); startGame(d); });
+    socket.on('roomJoined', d => { log("Unido a sala OK."); startGame(d); });
+    socket.on('errorMsg', msg => log("Error: " + msg, 'error'));
     socket.on('configUpdated', cfg => {
         state.settings.maxSpeed = cfg.maxSpeed; state.settings.accel = cfg.accel;
         if(!state.isHost) { ui.optMaxSpeed.value = cfg.maxSpeed; ui.dispMaxSpeed.innerText = cfg.maxSpeed; ui.optAccel.value = cfg.accel; ui.dispAccel.innerText = cfg.accel; }
     });
     socket.on('u', (data) => { if(state.inGame) updateRemotePlayers(data); });
     socket.on('playerLeft', id => { 
-        log(`Jugador ${id} salió.`);
         if(state.players[id]) { scene.remove(state.players[id].mesh); delete state.players[id]; } 
     });
     setInterval(() => { const t = Date.now(); socket.emit('ping', () => { ui.ping.innerText = `PING: ${Date.now()-t}ms`; }); }, 2000);
@@ -162,25 +173,25 @@ function startGame(data) {
         state.seed = data.seed;
         state.isHost = data.isHost;
         state.myLabel = data.label;
-        
         state.settings.maxSpeed = data.config.maxSpeed;
         state.settings.accel = data.config.accel;
+        
         ui.optMaxSpeed.value = data.config.maxSpeed; ui.dispMaxSpeed.innerText = data.config.maxSpeed;
         ui.optAccel.value = data.config.accel; ui.dispAccel.innerText = data.config.accel;
 
         if(state.isHost) { ui.hostControls.classList.remove('disabled-opt'); ui.adminBadge.style.display = 'inline-block'; } 
         else { ui.hostControls.classList.add('disabled-opt'); ui.adminBadge.style.display = 'none'; }
 
-        setSeed(state.seed);
+        setSeed(state.seed); // Esto ahora funcionará porque rng está definido
         ui.lobby.style.display = 'none'; ui.loading.style.display = 'flex';
         
-        log("Cargando entorno 3D...");
+        log("Cargando Motor 3D...");
         setTimeout(() => { 
             initThreeJS(); 
             ui.loading.style.display = 'none'; 
             ui.game.style.display = 'block'; 
             state.inGame = true; 
-            log("Juego iniciado correctamente.");
+            log("Juego Iniciado.");
             animate(); 
         }, 1000);
     } catch(e) {
@@ -210,14 +221,12 @@ const matAtmosphere = new THREE.PointsMaterial({ size: 0.4, color: 0xffffff, tra
 
 function initThreeJS() {
     try {
-        log("Inicializando ThreeJS...");
         scene = new THREE.Scene(); scene.fog = new THREE.FogExp2(0x87CEEB, 0.002);
         camera = new THREE.PerspectiveCamera(60, window.innerWidth/innerHeight, 0.1, 5000); camera.position.set(0,5,-10);
         renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        
         const oldCanvas = document.querySelector('canvas'); if(oldCanvas) oldCanvas.remove();
         document.body.appendChild(renderer.domElement);
 
@@ -234,13 +243,11 @@ function initThreeJS() {
         const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5); hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20); mainCar.add(hl); mainCar.add(hl.target);
 
         chunks = []; state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
-        log("Generando Chunks...");
+        log("Generando mundo...");
         for(let i=0; i<CONFIG.VISIBLE_CHUNKS; i++) spawnChunk();
-        
         const startData = getTrackData(0); if(startData) state.worldHeading = Math.atan2(startData.tan.x, startData.tan.z);
-        log("Motor listo.");
     } catch(e) {
-        log("Error en initThreeJS: " + e.message, 'error');
+        log("Error ThreeJS: " + e.message, 'error');
         throw e;
     }
 }
@@ -265,21 +272,21 @@ function setupEnvironment() {
     starField = new THREE.Points(sGeo, new THREE.PointsMaterial({color: 0xffffff, size: 1.5, transparent: true, opacity: 0})); scene.add(starField);
 }
 
-// ... [INCLUIR AQUÍ TODO EL BLOQUE DE GENERACIÓN PROCEDURAL, CHUNKS, INPUTS, ETC. IDÉNTICO AL ANTERIOR] ...
-// Por favor, asegúrate de que el código de Chunk, getTrackData, etc. esté presente.
-// Si no, el juego fallará en 'getTrackData is not defined'.
-// Voy a incluir las funciones esenciales aquí para asegurar que funcione.
-
 // ==========================================
-// 5. GENERACIÓN PROCEDURAL
+// 5. GENERACIÓN PROCEDURAL (NOISE & CHUNKS)
 // ==========================================
-// RNG Functions
-function mulberry32(a) { return function() { var t = a += 0x6D2B79F5; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; } }
-function setSeed(s) { rng = mulberry32(s); }
+const noisePerm = new Uint8Array(512); 
+const p = new Uint8Array(256);
 
-const noisePerm = new Uint8Array(512); const p = new Uint8Array(256);
-for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256); // Fallback random init
+function initNoise() {
+    // Regenerar tabla de permutación con el RNG sembrado actual
+    for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
+    for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
+}
+// Inicializar con ruido aleatorio por si acaso
+for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256);
 for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
+
 const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
 const lerpFn = (t, a, b) => a + t * (b - a);
 const grad = (hash, x, y, z) => { const h = hash & 15; const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z; return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v); };
@@ -519,7 +526,7 @@ function getTrackData(dist) {
 }
 
 // ==========================================
-// 7. BUCLE PRINCIPAL
+// 6. BUCLE PRINCIPAL
 // ==========================================
 let lastTime = performance.now();
 let frames = 0, lastFpsTime = 0;
@@ -534,7 +541,7 @@ function animate() {
     frames++; if(now - lastFpsTime >= 1000) { ui.fps.innerText = "FPS: " + frames; frames=0; lastFpsTime=now; }
 
     if(state.inGame) {
-        // --- FÍSICAS LOCALES ---
+        // FÍSICAS LOCALES
         const maxSpeed = state.settings.maxSpeed / 100.0; const accel = (state.settings.accel / 100.0) * dt * 2.0;
         if(state.input.gas) { if(state.manualSpeed < maxSpeed) state.manualSpeed += accel; } 
         else if(state.input.brake) { state.manualSpeed -= accel * 2.5; } else { state.manualSpeed *= 0.99; }
@@ -556,7 +563,7 @@ function animate() {
             }
         }
 
-        // --- UPDATE VISUAL ---
+        // UPDATE VISUAL
         const finalData = getTrackData(state.trackDist);
         if(finalData) {
             const pos = finalData.pos.clone(); pos.add(finalData.right.multiplyScalar(state.lateralOffset)); pos.y += CONFIG.ROAD_Y_OFFSET + 0.05;
@@ -576,7 +583,7 @@ function animate() {
         ui.speed.innerText = Math.floor(state.manualSpeed * 100);
         socket.emit('myState', { d: parseFloat(state.trackDist.toFixed(2)), l: parseFloat(state.lateralOffset.toFixed(2)), s: parseFloat(state.manualSpeed.toFixed(3)), h: parseFloat(state.worldHeading.toFixed(3)) });
 
-        // --- ENTORNO ---
+        // ENTORNO
         const tEnv = now * 0.00005; const carPos = mainCar.position;
         sunLight.position.set(carPos.x + Math.cos(tEnv)*1500, Math.sin(tEnv)*1500, carPos.z); sunLight.target.position.copy(carPos);
         moonLight.position.set(carPos.x - Math.cos(tEnv)*1500, -Math.sin(tEnv)*1500, carPos.z);
@@ -626,13 +633,15 @@ function updateRemotePlayers(data) {
 const joyZone = document.getElementById('joystick-zone'); const joyKnob = document.getElementById('joystick-knob');
 let joyId = null; const joyCenter = { x: 0, width: 0 };
 function handleJoyMove(clientX) {
-    let dx = clientX - (joyCenter.x + joyCenter.width/2); dx = Math.max(-50, Math.min(50, dx));
-    joyKnob.style.transform = `translate(${dx - 25}px, -25px)`; state.input.steer = -(dx / 50);
+    let dx = clientX - (joyCenter.x + joyCenter.width/2);
+    dx = Math.max(-50, Math.min(50, dx));
+    joyKnob.style.transform = `translate(${dx - 25}px, -25px)`;
+    state.input.steer = -(dx / 50);
 }
 joyZone.addEventListener('touchstart', e => { e.preventDefault(); joyId = e.changedTouches[0].identifier; const rect = joyZone.getBoundingClientRect(); joyCenter.x = rect.left; joyCenter.width = rect.width; handleJoyMove(e.changedTouches[0].clientX); });
 joyZone.addEventListener('touchmove', e => { e.preventDefault(); for(let i=0; i<e.changedTouches.length; i++) if(e.changedTouches[i].identifier === joyId) handleJoyMove(e.changedTouches[i].clientX); });
 joyZone.addEventListener('touchend', e => { e.preventDefault(); joyId = null; joyKnob.style.transform = `translate(-50%, -50%)`; state.input.steer = 0; });
-const bindBtn = (id, key) => { const el = document.getElementById(id); const set = (v) => { state.input[key] = v; el.style.transform = v ? 'scale(0.9)' : 'scale(1)'; el.style.opacity = v ? '1' : '0.8'; }; el.addEventListener('touchstart', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('touchend', (e)=>{ e.preventDefault(); set(false); }); el.addEventListener('mousedown', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('mouseup', (e)=>{ e.preventDefault(); set(false); }); };
+const bindBtn = (id, key) => { const el = document.getElementById(id); const set = (v) => { state.input[key] = v; el.style.transform = v?'scale(0.9)':'scale(1)'; el.style.opacity = v?'1':'0.8'; }; el.addEventListener('touchstart', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('touchend', (e)=>{ e.preventDefault(); set(false); }); el.addEventListener('mousedown', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('mouseup', (e)=>{ e.preventDefault(); set(false); }); };
 bindBtn('gas-btn', 'gas'); bindBtn('brake-btn', 'brake');
 window.addEventListener('keydown', e => { if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = true; if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = true; if(e.key === 'ArrowLeft' || e.key === 'a') state.input.steer = 1; if(e.key === 'ArrowRight' || e.key === 'd') state.input.steer = -1; });
 window.addEventListener('keyup', e => { if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = false; if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = false; if(['ArrowLeft','ArrowRight','a','d'].includes(e.key)) state.input.steer = 0; });
