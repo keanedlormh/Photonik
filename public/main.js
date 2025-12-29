@@ -125,12 +125,12 @@ let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = []; const smokeGroup = new THREE.Group();
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 
-// MATERIALES IDÉNTICOS AL ORIGINAL
+// MATERIALES
 const matRoad = new THREE.MeshStandardMaterial({ 
     color: 0x111111, 
     roughness: 0.6, 
     metalness: 0.1, 
-    side: THREE.DoubleSide // Asegura que se vea desde abajo si saltas
+    side: THREE.DoubleSide
 }); 
 const matWall = new THREE.MeshStandardMaterial({ 
     color: 0xcccccc, 
@@ -248,15 +248,14 @@ class Chunk {
     }
 
     buildOriginalGeometry() {
-        // Implementación EXACTA del código de ejemplo original
         const div = 40; 
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
         
         const rV = [], rI = []; // Road
         const wV = [], wI = []; // Walls
-        const lV = [], lI = []; // Lines White
-        const yV = [], yI = []; // Lines Yellow (Central)
+        const lV = [], lI = []; // Lines White (Lateral)
+        const yV = [], yI = []; // Lines Yellow (Central - Dashed)
 
         for(let i=0; i<=div; i++) {
             const p = pts[i]; const n = frames.binormals[i]; const up = frames.normals[i];
@@ -267,21 +266,17 @@ class Chunk {
                 p.x - n.x * CONFIG.ROAD_WIDTH_HALF, p.y + CONFIG.ROAD_Y_OFFSET, p.z - n.z * CONFIG.ROAD_WIDTH_HALF
             );
 
-            // 2. MUROS (Caja extruida: 4 vértices por paso: InnerTop, InnerBot, OuterTop, OuterBot)
-            // Left Wall
+            // 2. MUROS
             const L_Inner = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF));
             const L_Outer = p.clone().add(n.clone().multiplyScalar(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH));
             const yTop = p.y + CONFIG.ROAD_Y_OFFSET + CONFIG.WALL_HEIGHT;
             const yBot = p.y - 2.0;
 
-            // Vertices Muro Izquierdo (4 por slice)
-            // Orden: 0:InnerTop, 1:InnerBot, 2:OuterTop, 3:OuterBot
             wV.push(L_Inner.x, yTop, L_Inner.z); // 0
             wV.push(L_Inner.x, yBot, L_Inner.z); // 1
             wV.push(L_Outer.x, yTop, L_Outer.z); // 2
             wV.push(L_Outer.x, yBot, L_Outer.z); // 3
 
-            // Right Wall (Mismo proceso)
             const R_Inner = p.clone().add(n.clone().multiplyScalar(-CONFIG.ROAD_WIDTH_HALF));
             const R_Outer = p.clone().add(n.clone().multiplyScalar(-(CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH)));
             
@@ -290,67 +285,49 @@ class Chunk {
             wV.push(R_Outer.x, yTop, R_Outer.z); // 6
             wV.push(R_Outer.x, yBot, R_Outer.z); // 7
 
-            // 3. LÍNEAS BLANCAS LATERALES (Planas sobre asfalto)
+            // 3. LÍNEAS BLANCAS LATERALES
             const dist = CONFIG.ROAD_WIDTH_HALF - 0.8;
             const sw = 0.3;
-            // Left Line
-            lV.push(p.x + n.x * dist, p.y + CONFIG.ROAD_Y_OFFSET + 0.02, p.z + n.z * dist);
-            lV.push(p.x + n.x * (dist+sw), p.y + CONFIG.ROAD_Y_OFFSET + 0.02, p.z + n.z * (dist+sw));
-            // Right Line
-            lV.push(p.x - n.x * dist, p.y + CONFIG.ROAD_Y_OFFSET + 0.02, p.z - n.z * dist);
-            lV.push(p.x - n.x * (dist+sw), p.y + CONFIG.ROAD_Y_OFFSET + 0.02, p.z - n.z * (dist+sw));
+            const yLine = p.y + CONFIG.ROAD_Y_OFFSET + 0.03; // Ligeramente por encima del asfalto
+
+            // Left Line (Inner & Outer edges)
+            lV.push(p.x + n.x * dist, yLine, p.z + n.z * dist); // 0: Inner Left
+            lV.push(p.x + n.x * (dist+sw), yLine, p.z + n.z * (dist+sw)); // 1: Outer Left
+            // Right Line (Inner & Outer edges)
+            lV.push(p.x - n.x * dist, yLine, p.z - n.z * dist); // 2: Inner Right
+            lV.push(p.x - n.x * (dist+sw), yLine, p.z - n.z * (dist+sw)); // 3: Outer Right
 
             // 4. LÍNEA AMARILLA CENTRAL
             const lw = 0.15;
-            yV.push(p.x + n.x * lw, p.y + CONFIG.ROAD_Y_OFFSET + 0.02, p.z + n.z * lw);
-            yV.push(p.x - n.x * lw, p.y + CONFIG.ROAD_Y_OFFSET + 0.02, p.z - n.z * lw);
+            yV.push(p.x + n.x * lw, yLine, p.z + n.z * lw); // 0: Left Edge
+            yV.push(p.x - n.x * lw, yLine, p.z - n.z * lw); // 1: Right Edge
         }
 
-        // CONSTRUCCIÓN DE ÍNDICES (Coser la tira)
+        // CONSTRUCCIÓN DE ÍNDICES
         for(let i=0; i<div; i++) {
             // -- CARRETERA --
             const rBase = i * 2;
-            // Quad: rBase, rBase+2, rBase+1, rBase+1, rBase+2, rBase+3
             rI.push(rBase, rBase+2, rBase+1, rBase+1, rBase+2, rBase+3);
 
-            // -- MUROS (Complejos) --
-            const wBase = i * 8; // 8 vértices por slice (4 izq + 4 der)
-            
-            // LEFT WALL
-            // Top Face (0, 2, next0, next2) -> 0, 8, 2...
-            // Indices relativos al slice actual:
-            // 0:InTop, 1:InBot, 2:OutTop, 3:OutBot
-            // Next slice: +8
-            
-            // Top: 0, 8, 2, 2, 8, 10
+            // -- MUROS --
+            const wBase = i * 8;
             wI.push(wBase+0, wBase+8, wBase+2, wBase+2, wBase+8, wBase+10);
-            // Inner: 0, 1, 8, 8, 1, 9 (Mirando a pista)
-            // Corrección winding: 0, 1, 8 -> Anti-clockwise?
-            // Vamos a usar DoubleSide en material, así que el orden es menos crítico, pero mejor hacerlo bien.
-            wI.push(wBase+0, wBase+2, wBase+8); // Top filler? No.
-            // Inner face (vertical): 0-1-8-9
             wI.push(wBase+0, wBase+1, wBase+8, wBase+1, wBase+9, wBase+8);
-            // Outer face (vertical): 2-10-3-11
             wI.push(wBase+2, wBase+10, wBase+3, wBase+3, wBase+10, wBase+11);
-
-            // RIGHT WALL (Indices 4,5,6,7)
-            // Top: 4, 6, 12, 12, 6, 14
             wI.push(wBase+4, wBase+6, wBase+12, wBase+12, wBase+6, wBase+14);
-            // Inner: 4-12-5-13
             wI.push(wBase+4, wBase+12, wBase+5, wBase+5, wBase+12, wBase+13);
-            // Outer: 6-7-14-15
             wI.push(wBase+6, wBase+7, wBase+14, wBase+7, wBase+15, wBase+14);
 
-            // -- LÍNEAS BLANCAS --
-            const lBase = i * 4;
+            // -- LÍNEAS BLANCAS LATERALES --
+            const lBase = i * 4; // 4 vértices por segmento (2 izq, 2 der)
             // Left line quad
             lI.push(lBase, lBase+4, lBase+1, lBase+1, lBase+4, lBase+5);
             // Right line quad
             lI.push(lBase+2, lBase+6, lBase+3, lBase+3, lBase+6, lBase+7);
 
-            // -- LÍNEA AMARILLA (Dash logic) --
+            // -- LÍNEA AMARILLA CENTRAL (Dashed) --
             if (i % 2 === 0) {
-                const yBase = i * 2;
+                const yBase = i * 2; // 2 vértices por segmento
                 yI.push(yBase, yBase+2, yBase+1, yBase+1, yBase+2, yBase+3);
             }
         }
@@ -371,6 +348,7 @@ class Chunk {
         const lG = new THREE.BufferGeometry();
         lG.setAttribute('position', new THREE.Float32BufferAttribute(lV, 3));
         lG.setIndex(lI);
+        // No necesitan normales complejas al ser planas sobre asfalto
         this.group.add(new THREE.Mesh(lG, matLineWhite));
 
         if(yI.length > 0) {
