@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-    <title>Photonik V20 Online - Debug</title>
+    <title>Photonik V20 Online</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap');
@@ -14,7 +14,7 @@
         #game-ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; display:none; }
         .pointer-auto { pointer-events: auto; }
 
-        /* PANELES ESTILO CYBER */
+        /* PANELES */
         .panel { background: rgba(10, 10, 20, 0.9); padding: 40px; border-radius: 4px; border: 1px solid rgba(0, 150, 255, 0.3); text-align: center; width: 90%; max-width: 420px; backdrop-filter: blur(12px); box-shadow: 0 0 30px rgba(0, 100, 255, 0.1); position: relative; clip-path: polygon(0 0, 100% 0, 100% 90%, 95% 100%, 0 100%); }
         h1 { margin: 0; font-family: 'Orbitron', sans-serif; font-size: 3.5rem; background: linear-gradient(180deg, #fff, #0af); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-style: italic; letter-spacing: -2px; transform: skewX(-10deg); }
         .subtitle { color: #0af; margin-bottom: 30px; letter-spacing: 6px; font-size: 14px; font-weight: 700; }
@@ -26,7 +26,7 @@
         
         input.code-input { background: rgba(0,0,0,0.6); border: 1px solid #444; border-bottom: 2px solid #0af; padding: 15px; color: white; width: 100%; box-sizing: border-box; text-align: center; font-size: 1.5rem; letter-spacing: 5px; margin-bottom: 10px; text-transform: uppercase; outline: none; pointer-events: auto; font-family: 'Orbitron'; }
         
-        /* MENU GLOBAL (Ahora fuera de game-ui) */
+        /* MENU GLOBAL */
         #menu-btn { position: absolute; top: 20px; right: 20px; width: 50px; height: 50px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 24px; cursor: pointer; pointer-events: auto; backdrop-filter: blur(5px); z-index: 1000; }
         #menu-modal { position: absolute; top: 80px; right: 20px; background: rgba(10, 15, 20, 0.98); border: 1px solid #333; border-left: 3px solid #0af; padding: 20px; width: 280px; display: none; flex-direction: column; gap: 12px; pointer-events: auto; z-index: 999; max-height: 80vh; overflow-y: auto; box-shadow: 0 10px 50px black; }
         
@@ -60,10 +60,25 @@
         
         #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 140px; height: 140px; background: rgba(255,255,255,0.05); border-radius: 50%; border: 2px solid rgba(255,255,255,0.1); touch-action: none; pointer-events: auto; }
         #joystick-knob { position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; background: rgba(255, 50, 50, 0.8); border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; box-shadow: 0 0 10px red; }
+        
         .pedal { position: absolute; border-radius: 8px; border: 2px solid rgba(255,255,255,0.1); touch-action: none; pointer-events: auto; backdrop-filter: blur(4px); }
         .pedal:active { transform: scale(0.95); opacity: 0.8; }
-        #gas-btn { bottom: 40px; right: 40px; width: 80px; height: 160px; background: linear-gradient(to top, #600, #f00); clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 100%); }
-        #brake-btn { bottom: 40px; right: 140px; width: 90px; height: 70px; background: linear-gradient(to top, #222, #555); clip-path: polygon(0 0, 100% 0, 80% 100%, 0 100%); }
+        
+        /* PEDAL ACELERADOR MÁS CORTO */
+        #gas-btn { 
+            bottom: 40px; right: 40px; 
+            width: 80px; 
+            height: 110px; /* <--- REDUCIDO DE 160px */
+            background: linear-gradient(to top, #600, #f00); 
+            clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 100%); 
+        }
+        
+        #brake-btn { 
+            bottom: 40px; right: 140px; 
+            width: 90px; height: 70px; 
+            background: linear-gradient(to top, #222, #555); 
+            clip-path: polygon(0 0, 100% 0, 80% 100%, 0 100%); 
+        }
         
         #fps { position: absolute; top: 10px; left: 10px; color: #0f0; font-family: monospace; font-size: 12px; display:none; }
         #ping { position: absolute; top: 25px; left: 10px; color: #0f0; font-family: monospace; font-size: 12px; display:none; }
