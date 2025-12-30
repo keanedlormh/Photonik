@@ -32,7 +32,6 @@ const CONFIG = {
     WALL_HEIGHT: 1.5,
     ROAD_Y_OFFSET: 0.2, 
     CHUNK_LENGTH: 100,
-    TERRAIN_WIDTH: 2000, // Mundo duplicado
     VISIBLE_CHUNKS: 16,
     WALL_LIMIT: 7.8 
 };
@@ -51,32 +50,22 @@ const state = {
     input: { steer: 0, gas: false, brake: false },
     settings: {
         maxSpeed: 500, accel: 40, sens: 60, stiffness: 50, 
-        invertSteer: true, camDist: 18, fpv: false,
-        pcMode: false, hideArrows: false
+        invertSteer: false, camDist: 18, fpv: false
     },
     seed: 1234,
-    // Estado expandido para la generación inteligente
-    worldGenState: { 
-        point: new THREE.Vector3(0, 10, 0), // Empezar un poco alto
-        angle: 0, 
-        dist: 0,
-        // Memoria para curvas
-        curveMode: 0, // 0: Recta, 1: Izq, -1: Der
-        curveStrength: 0, 
-        curveDuration: 0, // Cuantos chunks quedan de esta curva
-        history: [] // Historial de puntos para evitar solapamiento
-    }
+    worldGenState: { point: new THREE.Vector3(0, 4, 0), angle: 0, dist: 0 }
 };
 
 // ==========================================
 // 2. VARIABLES GLOBALES MOTOR
 // ==========================================
 let scene, camera, renderer, composer;
-let chunks = []; 
+let chunks = []; // Array de tramos de pista
 let smokeGroup, mainCar;
 let sunLight, sunMesh, moonLight, moonMesh, ambientLight, starField;
 const smokeParticles = [];
 
+// Materiales Globales
 const matOutline = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
 const matRoad = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }); 
 const matWall = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
@@ -91,7 +80,7 @@ const matCloud = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xd
 const matAtmosphere = new THREE.PointsMaterial({ size: 0.4, color: 0xffffff, transparent: true, opacity: 0.3 });
 
 // ==========================================
-// 3. RNG & NOISE & HELPERS
+// 3. RNG & NOISE
 // ==========================================
 const noisePerm = new Uint8Array(512); 
 const p = new Uint8Array(256);
@@ -111,6 +100,7 @@ function initNoise() {
     for(let i=0; i<256; i++) p[i] = Math.floor(rng()*256);
     for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 }
+// Init fallback
 for(let i=0; i<256; i++) p[i] = Math.floor(Math.random()*256);
 for(let i=0; i<512; i++) noisePerm[i] = p[i & 255];
 
@@ -124,8 +114,13 @@ const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
 const lerpFn = (t, a, b) => a + t * (b - a);
 const grad = (hash, x, y, z) => { const h = hash & 15; const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z; return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v); };
 const noise = (x, y) => { const X = Math.floor(x) & 255, Y = Math.floor(y) & 255; x -= Math.floor(x); y -= Math.floor(y); const u = fade(x), v = fade(y); const A = noisePerm[X] + Y, B = noisePerm[X + 1] + Y; return lerpFn(v, lerpFn(u, grad(noisePerm[A], x, y, 0), grad(noisePerm[B], x - 1, y, 0)), lerpFn(u, grad(noisePerm[A + 1], x, y - 1, 0), grad(noisePerm[B + 1], x - 1, y - 1, 0))); };
-function getTerrainHeight(x, z) { return noise(x*0.005, z*0.005)*60 + noise(x*0.02, z*0.02)*10; }
+function getTerrainHeight(x, z) { return noise(x*0.012, z*0.012)*30 + noise(x*0.04, z*0.04)*6; }
 
+// ==========================================
+// 4. CLASES Y FUNCIONES DE MUNDO (MOVIDO ARRIBA)
+// ==========================================
+
+// Utils Geometría
 function createGridGeometry(verts, colors, rows, cols) {
     const g = new THREE.BufferGeometry(); const idx = [];
     for(let i=0; i<rows; i++) for(let j=0; j<cols; j++) {
@@ -161,10 +156,12 @@ function createCar(colorStr) {
         const w = new THREE.Mesh(wGeo, matW); w.position.set(p[0], 0.4, p[1]); car.add(w);
         car.add(createOutline(wGeo, 1.05).translateX(p[0]).translateY(0.4).translateZ(p[1]));
     });
+    
     const tlGeo = new THREE.BoxGeometry(0.4, 0.2, 0.1);
     const tl1 = new THREE.Mesh(tlGeo, matTailLight); tl1.position.set(0.6, 0.7, -2.15); car.add(tl1);
     const tl2 = new THREE.Mesh(tlGeo, matTailLight); tl2.position.set(-0.6, 0.7, -2.15); car.add(tl2);
     const tlGlow = new THREE.PointLight(0xff0000, 2, 5); tlGlow.position.set(0, 0.7, -2.5); car.add(tlGlow);
+
     return car;
 }
 
@@ -177,99 +174,24 @@ class Chunk {
         this.atmosphere = null;
         scene.add(this.group);
 
-        // --- LÓGICA DE TRAZADO INTELIGENTE ---
-        const gs = state.worldGenState;
-        
-        // 1. Decidir nuevo modo si el anterior terminó
-        if (gs.curveDuration <= 0) {
-            const dice = rng(); // 0.0 - 1.0
-            
-            // 40% RECTAS
-            if (dice < 0.4) {
-                gs.curveMode = 0; // Recta
-                gs.curveStrength = (rng() - 0.5) * 0.1; // Variación mínima
-                gs.curveDuration = 1 + Math.floor(rng() * 2); // 1-2 chunks
-            }
-            // 30% CURVA SUAVE
-            else if (dice < 0.7) {
-                gs.curveMode = rng() > 0.5 ? 1 : -1;
-                gs.curveStrength = 0.3 + rng() * 0.2; // ~15-30 grados
-                gs.curveDuration = 2 + Math.floor(rng() * 3); // 2-4 chunks
-            }
-            // 30% CURVA CERRADA (AMPLIA)
-            else {
-                gs.curveMode = rng() > 0.5 ? 1 : -1;
-                gs.curveStrength = 0.7 + rng() * 0.5; // ~40-70 grados (Limitado para no romper física)
-                gs.curveDuration = 2 + Math.floor(rng() * 2); // 2-3 chunks
-            }
-        }
-
-        // 2. Comprobación Anti-Overlap (Detector de colisión de trazado)
-        // Predecimos dónde acabaría este chunk
-        let proposedAngle = startA + (gs.curveMode * gs.curveStrength);
-        let testX = Math.cos(proposedAngle) * CONFIG.CHUNK_LENGTH + startP.x;
-        let testZ = Math.sin(proposedAngle) * CONFIG.CHUNK_LENGTH + startP.z;
-
-        // Comprobar distancia contra historial reciente (últimos 40 chunks, saltando los últimos 3)
-        let collision = false;
-        const histLen = gs.history.length;
-        // Solo chequeamos si tenemos suficiente historial
-        if (histLen > 10) {
-            for (let i = 0; i < histLen - 5; i++) {
-                const p = gs.history[i];
-                const dx = testX - p.x;
-                const dz = testZ - p.z;
-                if (Math.sqrt(dx*dx + dz*dz) < 150) { // Si va a pasar a menos de 150m de una pista antigua
-                    collision = true;
-                    break;
-                }
-            }
-        }
-
-        // Si detectamos colisión, forzamos giro brusco al lado contrario
-        if (collision) {
-            // Invertir dirección y aumentar fuerza para escapar
-            gs.curveMode = -gs.curveMode || 1; // Si era 0 (recta), girar a la derecha por defecto
-            gs.curveStrength = 1.2; 
-            proposedAngle = startA + (gs.curveMode * gs.curveStrength);
-        }
-
-        // Decrementar duración del modo actual
-        gs.curveDuration--;
-
-        // 3. Generar Geometría Final
-        const endAngle = proposedAngle;
+        const angleChange = (rng() - 0.5) * 0.5;
+        const endAngle = startA + angleChange;
         const p0 = startP;
         const endX = Math.cos(endAngle) * CONFIG.CHUNK_LENGTH + p0.x;
         const endZ = Math.sin(endAngle) * CONFIG.CHUNK_LENGTH + p0.z;
         
-        // --- ALTURA ---
-        // Obtenemos altura natural
         let tH = getTerrainHeight(endX, endZ);
-        
-        // Suavizado de pendiente (Slope Limiter)
-        // La carretera no puede subir/bajar más de X metros por chunk
-        const maxSlope = 15.0; // +/- 15 metros altura por 100m long
-        let targetY = THREE.MathUtils.clamp(tH + 4.0, p0.y - maxSlope, p0.y + maxSlope);
-        
-        // Forzar altura mínima global para evitar bug de subsuelo
-        if (targetY < 2) targetY = 2;
+        let targetY = (tH < 1) ? Math.max(p0.y, 5) : tH + 3.0;
+        targetY = THREE.MathUtils.clamp(targetY, p0.y - 6.0, p0.y + 6.0);
 
         const p3 = new THREE.Vector3(endX, targetY, endZ);
+        const cp1 = new THREE.Vector3(Math.cos(startA)*50, 0, Math.sin(startA)*50).add(p0);
+        const cp2 = new THREE.Vector3(Math.cos(endAngle)*-50, 0, Math.sin(endAngle)*-50).add(p3);
         
-        // Bezier Controls (Tensión)
-        // Curvas más cerradas requieren CP más cercanos para no hacer lazos
-        const cpDist = Math.abs(gs.curveStrength) > 0.8 ? 60 : 50;
-        
-        const cp1 = new THREE.Vector3(Math.cos(startA)*cpDist, 0, Math.sin(startA)*cpDist).add(p0);
-        const cp2 = new THREE.Vector3(Math.cos(endAngle)*-cpDist, 0, Math.sin(endAngle)*-cpDist).add(p3);
-        cp1.y = p0.y; cp2.y = p3.y; // Suavizar pendiente
-
         this.curve = new THREE.CubicBezierCurve3(p0, cp1, cp2, p3);
         this.length = this.curve.getLength();
         this.endDist = globalDist + this.length;
-        this.endPoint = p3;
-        this.endAngle = endAngle;
+        this.endPoint = p3; this.endAngle = endAngle;
 
         this.buildGeometry();
         this.buildTerrain();
@@ -315,7 +237,8 @@ class Chunk {
             const w = i * 8; 
             wI.push(w+0, w+8, w+2, w+2, w+8, w+10); wI.push(w+0, w+1, w+8, w+1, w+9, w+8); wI.push(w+2, w+10, w+3, w+3, w+10, w+11);
             wI.push(w+4, w+6, w+12, w+12, w+6, w+14); wI.push(w+4, w+12, w+5, w+5, w+12, w+13); wI.push(w+6, w+7, w+14, w+7, w+15, w+14);
-            const l = i * 4; lI.push(l, l+4, l+1, l+1, l+4, l+5); lI.push(l+2, l+6, l+3, l+3, l+6, l+7);
+            const l = i * 4;
+            lI.push(l, l+4, l+1, l+1, l+4, l+5); lI.push(l+2, l+6, l+3, l+3, l+6, l+7);
             if (i % 2 === 0) { const y = i * 2; yI.push(y, y+2, y+1, y+1, y+2, y+3); }
         }
 
@@ -328,44 +251,18 @@ class Chunk {
     }
 
     buildTerrain() {
-        const div = 25; const w = CONFIG.TERRAIN_WIDTH; const divW = 16; // Más resolución lateral
+        const div = 25; const w = 400; const divW = 10;
         const vs = [], cs = []; const col = new THREE.Color();
         const pts = this.curve.getSpacedPoints(div);
         const frames = this.curve.computeFrenetFrames(div, false);
-        
-        // ZONA DE EXCAVACIÓN SEGURA (Ancho carretera + márgenes)
-        const safeZone = CONFIG.ROAD_WIDTH_HALF + CONFIG.WALL_WIDTH + 6.0;
-
         for(let i=0; i<=div; i++) {
             const P = pts[i]; const N = frames.binormals[i];
-            
-            // Altura real de la carretera en este punto (incluyendo Y_OFFSET)
-            const roadHeight = P.y + CONFIG.ROAD_Y_OFFSET;
-
             for(let j=0; j<=divW; j++) {
                 const u = (j/divW) - 0.5; const xOff = u * w;
                 const px = P.x + N.x * xOff; const pz = P.z + N.z * xOff;
                 let py = getTerrainHeight(px, pz);
-                
-                // Color natural
                 if(py < -1) col.setHex(0xe6c288); else if(py < 10) col.setHex(0x2e7d32); else col.setHex(0x5d4037);
-                
-                // --- TERRAFORMACIÓN (Aplastar terreno bajo carretera) ---
-                const dist = Math.abs(xOff);
-                
-                if (dist < safeZone) {
-                    // Estamos DEBAJO de la carretera. Forzar terreno abajo.
-                    // Debe estar al menos 6 metros por debajo del asfalto.
-                    const maxAllowedY = roadHeight - 6.0;
-                    if (py > maxAllowedY) py = maxAllowedY;
-                } else if (dist < safeZone + 20.0) {
-                    // ZONA DE TRANSICIÓN (Talud suave)
-                    // Interpola entre la altura "aplastada" y la altura natural del terreno
-                    const blend = (dist - safeZone) / 20.0; // 0 a 1
-                    const trenchY = Math.min(py, roadHeight - 6.0);
-                    py = lerpFn(blend, trenchY, py);
-                }
-
+                if(Math.abs(xOff) < CONFIG.ROAD_WIDTH_HALF + 5) py = Math.min(py, P.y - 8);
                 vs.push(px, py, pz); cs.push(col.r, col.g, col.b);
             }
         }
@@ -373,51 +270,34 @@ class Chunk {
         const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({vertexColors: true, flatShading: true}));
         m.receiveShadow = true; this.group.add(m);
         const mid = this.curve.getPointAt(0.5);
-        const wa = new THREE.Mesh(new THREE.PlaneGeometry(w, this.length*1.2), matWater);
+        const wa = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), matWater);
         wa.rotation.x = -Math.PI/2; wa.position.set(mid.x, -2, mid.z);
         this.group.add(wa);
     }
 
     buildProps() {
-        for(let i=0; i<=1; i+= 5 / this.length) {
+        for(let i=0; i<=1; i+=0.15) {
             const p = this.curve.getPointAt(i);
-            // Comprobamos la altura MODIFICADA del terreno (aproximada, ya que no guardamos el mesh data)
-            // Como no tenemos acceso fácil al mesh deformado aquí, usamos una heurística:
-            // Si la carretera está muy alta respecto al ruido base, ponemos pilar.
-            const naturalH = getTerrainHeight(p.x, p.z);
-            if(p.y > naturalH + 5) {
-                const h = (p.y - 0.5) - naturalH; 
-                // Limitar altura pilar para no atravesar si el terreno sube
-                if(h > 0) {
-                    const pil = new THREE.Mesh(new THREE.BoxGeometry(6, h, 4), matPillar);
-                    pil.position.set(p.x, naturalH + h/2, p.z);
-                    pil.castShadow = true;
-                    this.group.add(pil);
-                }
+            const th = getTerrainHeight(p.x, p.z);
+            if(p.y > th + 4) {
+                const h = (p.y - 0.5) - th; 
+                const pil = new THREE.Mesh(new THREE.BoxGeometry(6, h, 4), matPillar);
+                pil.position.set(p.x, th + h/2, p.z);
+                pil.castShadow = true;
+                this.group.add(pil);
             }
         }
-
-        const treeCount = Math.floor(this.length / 4);
-        for(let i=0; i<treeCount; i++) {
-            const t = rng(); 
-            const side = rng() > 0.5 ? 1 : -1;
-            
-            // ZONA DE EXCLUSIÓN ÁRBOLES: 35 metros desde el centro (Carretera ~20m ancho)
-            const minDist = 35; 
-            const dist = minDist + rng() * 100;
-            
-            const p = this.curve.getPointAt(t); 
-            const tan = this.curve.getTangentAt(t);
+        for(let i=0; i<20; i++) {
+            const t = rng(); const side = rng() > 0.5 ? 1 : -1; const dist = CONFIG.ROAD_WIDTH_HALF + 15 + rng() * 60;
+            const p = this.curve.getPointAt(t); const tan = this.curve.getTangentAt(t);
             const bin = new THREE.Vector3(-tan.z, 0, tan.x).normalize();
-            
             const pos = p.clone().add(bin.multiplyScalar(side * dist));
             const y = getTerrainHeight(pos.x, pos.z);
-            
             if(y > 0) {
                 const gr = new THREE.Group();
                 const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 12, 5), matWood); tr.position.y = 6;
                 const lv = new THREE.Mesh(new THREE.ConeGeometry(3.5, 9, 5), matLeaves); lv.position.y = 11;
-                gr.add(tr, lv); gr.position.set(pos.x, y - 3.0, pos.z); 
+                gr.add(tr, lv); gr.position.set(pos.x, y - 4.0, pos.z); // HUNDIR 4M
                 gr.scale.setScalar(0.8 + rng() * 0.5); gr.castShadow = true;
                 this.group.add(gr);
             }
@@ -436,7 +316,7 @@ class Chunk {
                 cloud.add(m);
             }
             const p = this.curve.getPointAt(0.5);
-            cloud.position.set(p.x + (rng()-0.5)*CONFIG.TERRAIN_WIDTH*0.5, 50 + rng()*40, p.z + (rng()-0.5)*CONFIG.TERRAIN_WIDTH*0.5);
+            cloud.position.set(p.x + (rng()-0.5)*400, 50 + rng()*40, p.z + (rng()-0.5)*400);
             this.group.add(cloud);
             this.clouds.push(cloud);
         }
@@ -445,8 +325,7 @@ class Chunk {
     buildAtmosphere() {
         const pGeo = new THREE.BufferGeometry();
         const pPos = [];
-        const count = Math.floor(this.length * 2);
-        for(let i=0; i<count; i++) {
+        for(let i=0; i<250; i++) {
             const t = Math.random(); const p = this.curve.getPointAt(t);
             pPos.push(p.x + (Math.random()-0.5)*120, p.y + Math.random()*40, p.z + (Math.random()-0.5)*120);
         }
@@ -463,14 +342,7 @@ function spawnChunk() {
     const idx = chunks.length > 0 ? chunks[chunks.length-1].index + 1 : 0;
     const c = new Chunk(idx, state.worldGenState.point, state.worldGenState.angle, state.worldGenState.dist);
     chunks.push(c);
-    
-    // GUARDAR PUNTO EN HISTORIAL (Para evitar lazos)
-    state.worldGenState.history.push({ x: c.endPoint.x, z: c.endPoint.z });
-    if(state.worldGenState.history.length > 50) state.worldGenState.history.shift(); // Mantener historial limpio
-    
-    state.worldGenState.point = c.endPoint; 
-    state.worldGenState.angle = c.endAngle; 
-    state.worldGenState.dist += c.length;
+    state.worldGenState.point = c.endPoint; state.worldGenState.angle = c.endAngle; state.worldGenState.dist += c.length;
 }
 
 function getTrackData(dist) {
@@ -504,9 +376,8 @@ const ui = {
     roomList: document.getElementById('room-list'),
     brakeBtn: document.getElementById('brake-btn'),
     leaderboard: document.getElementById('leaderboard'),
-    joystickZone: document.getElementById('joystick-zone'),
-    arrowControls: document.getElementById('arrow-controls'),
     
+    // Config
     optMaxSpeed: document.getElementById('opt-max-speed'), dispMaxSpeed: document.getElementById('disp-max-speed'),
     optAccel: document.getElementById('opt-accel'), dispAccel: document.getElementById('disp-accel'),
     optSens: document.getElementById('opt-sens'), dispSens: document.getElementById('disp-sens'),
@@ -515,15 +386,14 @@ const ui = {
     hostControls: document.getElementById('host-controls'),
     adminBadge: document.getElementById('admin-badge'),
     
+    // Checks
     chkDebug: document.getElementById('chk-debug'),
     chkInvert: document.getElementById('chk-invert'),
     chkShowBrake: document.getElementById('chk-show-brake'),
     chkFPV: document.getElementById('chk-fpv'),
     chkFps: document.getElementById('chk-fps'),
     chkPing: document.getElementById('chk-ping'),
-    chkLb: document.getElementById('chk-lb'),
-    chkPcMode: document.getElementById('chk-pc-mode'),
-    chkHideArrows: document.getElementById('chk-hide-arrows')
+    chkLb: document.getElementById('chk-lb')
 };
 
 ui.menuBtn.onclick = () => ui.menuModal.style.display = (ui.menuModal.style.display==='flex'?'none':'flex');
@@ -543,18 +413,6 @@ ui.chkFPV.onchange = (e) => { state.settings.fpv = e.target.checked; updateCarVi
 ui.chkFps.onchange = (e) => ui.fps.style.display = e.target.checked ? 'block' : 'none';
 ui.chkPing.onchange = (e) => ui.ping.style.display = e.target.checked ? 'block' : 'none';
 ui.chkLb.onchange = (e) => ui.leaderboard.style.display = e.target.checked ? 'flex' : 'none';
-
-function updateControlMode() {
-    if(state.settings.pcMode) {
-        ui.joystickZone.style.display = 'none';
-        ui.arrowControls.style.display = state.settings.hideArrows ? 'none' : 'flex';
-    } else {
-        ui.joystickZone.style.display = 'block';
-        ui.arrowControls.style.display = 'none';
-    }
-}
-ui.chkPcMode.onchange = (e) => { state.settings.pcMode = e.target.checked; updateControlMode(); };
-ui.chkHideArrows.onchange = (e) => { state.settings.hideArrows = e.target.checked; updateControlMode(); };
 
 document.getElementById('btn-connect').onclick = () => {
     log("Conectando...");
@@ -617,7 +475,6 @@ function startGame(data) {
             ui.loading.style.display = 'none'; 
             ui.game.style.display = 'block'; 
             state.inGame = true; 
-            updateControlMode();
             log("Juego Listo.");
             animate(); 
         }, 500);
@@ -652,10 +509,8 @@ function initThreeJS() {
         scene.add(mainCar);
         const hl = new THREE.SpotLight(0xffffff, 800, 300, 0.5, 0.5); hl.position.set(0, 1.5, 2); hl.target.position.set(0,0,20); mainCar.add(hl); mainCar.add(hl.target);
 
-        chunks = []; 
-        state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0, curvatureBias: 0, history: [] };
+        chunks = []; state.worldGenState = { point: new THREE.Vector3(0,4,0), angle: 0, dist: 0 };
         for(let i=0; i<CONFIG.VISIBLE_CHUNKS; i++) spawnChunk();
-        
         const startData = getTrackData(0); if(startData) state.worldHeading = Math.atan2(startData.tan.x, startData.tan.z);
     } catch(e) {
         log("Init 3D Error: " + e.message, 'error');
@@ -821,38 +676,8 @@ function handleJoyMove(clientX) {
 joyZone.addEventListener('touchstart', e => { e.preventDefault(); joyId = e.changedTouches[0].identifier; const rect = joyZone.getBoundingClientRect(); joyCenter.x = rect.left; joyCenter.width = rect.width; handleJoyMove(e.changedTouches[0].clientX); });
 joyZone.addEventListener('touchmove', e => { e.preventDefault(); for(let i=0; i<e.changedTouches.length; i++) if(e.changedTouches[i].identifier === joyId) handleJoyMove(e.changedTouches[i].clientX); });
 joyZone.addEventListener('touchend', e => { e.preventDefault(); joyId = null; joyKnob.style.transform = `translate(-50%, -50%)`; state.input.steer = 0; });
-
-// ARROW BUTTONS LOGIC
-const btnLeft = document.getElementById('btn-left');
-const btnRight = document.getElementById('btn-right');
-if(btnLeft && btnRight) {
-    function handleArrow(dir, pressed) {
-        if(pressed) state.input.steer = dir; // -1 (Right), 1 (Left) - Depende de inversión
-        else if(state.input.steer === dir) state.input.steer = 0;
-    }
-    btnLeft.addEventListener('touchstart', (e)=>{ e.preventDefault(); handleArrow(1, true); });
-    btnLeft.addEventListener('touchend', (e)=>{ e.preventDefault(); handleArrow(1, false); });
-    btnLeft.addEventListener('mousedown', (e)=>{ e.preventDefault(); handleArrow(1, true); });
-    btnLeft.addEventListener('mouseup', (e)=>{ e.preventDefault(); handleArrow(1, false); });
-    btnRight.addEventListener('touchstart', (e)=>{ e.preventDefault(); handleArrow(-1, true); });
-    btnRight.addEventListener('touchend', (e)=>{ e.preventDefault(); handleArrow(-1, false); });
-    btnRight.addEventListener('mousedown', (e)=>{ e.preventDefault(); handleArrow(-1, true); });
-    btnRight.addEventListener('mouseup', (e)=>{ e.preventDefault(); handleArrow(-1, false); });
-}
-
 const bindBtn = (id, key) => { const el = document.getElementById(id); const set = (v) => { state.input[key] = v; el.style.transform = v?'scale(0.9)':'scale(1)'; el.style.opacity = v?'1':'0.8'; }; el.addEventListener('touchstart', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('touchend', (e)=>{ e.preventDefault(); set(false); }); el.addEventListener('mousedown', (e)=>{ e.preventDefault(); set(true); }); el.addEventListener('mouseup', (e)=>{ e.preventDefault(); set(false); }); };
 bindBtn('gas-btn', 'gas'); bindBtn('brake-btn', 'brake');
-
-window.addEventListener('keydown', e => { 
-    if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = true; 
-    if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = true; 
-    if(e.key === 'ArrowLeft' || e.key === 'a') state.input.steer = 1; 
-    if(e.key === 'ArrowRight' || e.key === 'd') state.input.steer = -1; 
-});
-window.addEventListener('keyup', e => { 
-    if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = false; 
-    if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = false; 
-    if(['ArrowLeft','ArrowRight','a','d'].includes(e.key)) state.input.steer = 0; 
-});
-
+window.addEventListener('keydown', e => { if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = true; if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = true; if(e.key === 'ArrowLeft' || e.key === 'a') state.input.steer = 1; if(e.key === 'ArrowRight' || e.key === 'd') state.input.steer = -1; });
+window.addEventListener('keyup', e => { if(e.key === 'ArrowUp' || e.key === 'w') state.input.gas = false; if(e.key === 'ArrowDown' || e.key === 's') state.input.brake = false; if(['ArrowLeft','ArrowRight','a','d'].includes(e.key)) state.input.steer = 0; });
 window.addEventListener('resize', () => { if(camera && renderer) { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); composer.setSize(window.innerWidth, window.innerHeight); } });
